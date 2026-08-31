@@ -1,0 +1,19 @@
+场景A 打标模拟 · 质量/来源报告
+========================================
+用户数: 9008   K=2  silhouette=0.238
+PCA前2维累计解释方差: 37.85%
+特征来源(real真实/simulated模拟):
+  age: real + simulated
+  sex: real + simulated
+  login_num: real
+  order_cnt: real + simulated
+  total_spend: real + simulated
+  activity_cnt: real + simulated
+  points_balance: real + simulated
+  recency_days: real + simulated
+每簇人数:
+  0: 6700 (活动互动)
+  1: 2308 (活动互动/沉睡/回流/高活跃)
+
+注: 测试库数据质量差，缺失/无效特征由固定种子随机模型模拟；
+分群结果仅证明‘特征→算法→标签’链路可运行，不代表真实业务人群。

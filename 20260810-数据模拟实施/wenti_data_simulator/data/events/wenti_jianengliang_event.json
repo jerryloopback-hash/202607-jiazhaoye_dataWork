@@ -1,0 +1,640 @@
+[
+  {
+    "event_id": "JN_EVT_001",
+    "event_name": "EVT_register_member",
+    "event_description": "新会员注册，生成 j_member 基础记录",
+    "system": "jianengliang",
+    "phase": "batch2",
+    "trigger": {
+      "conditions": [],
+      "probability_keys": [],
+      "notes": "system 字段已于 2026-08-12 从实例库移除，直接从全库随机抽样"
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id", "phone", "venue_id"],
+    "key_generation": {
+      "member_id": "auto_increment_start_10001",
+      "phone": "instance.phone"
+    },
+    "preconditions": ["venue_exists"],
+    "postconditions": ["phone_unique_in_j_member"],
+    "follow_up_events": ["EVT_bind_third_party", "EVT_add_ticket_person", "EVT_open_time_card"],
+    "phase1_scope": "in_scope",
+    "notes": "j_member.id 为 INT，起始值 10001。phone 来自实例库，全局唯一。rank 默认0（普通会员）。"
+  },
+
+  {
+    "event_id": "JN_EVT_002",
+    "event_name": "EVT_bind_third_party",
+    "event_description": "会员绑定第三方账号（微信/支付宝）",
+    "system": "jianengliang",
+    "phase": "batch3",
+    "trigger": {
+      "conditions": ["member_exists"],
+      "probability_keys": ["bind_wechat"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_third",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "bind_wechat=true",
+        "required": false
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id"],
+    "key_generation": {
+      "third_id": "random_openid_28chars",
+      "union_id": "random_unionid_29chars"
+    },
+    "preconditions": ["member_exists"],
+    "postconditions": [],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "third_type=1（微信），third_source=1（小程序）。约75%的会员触发。"
+  },
+
+  {
+    "event_id": "JN_EVT_003",
+    "event_name": "EVT_add_ticket_person",
+    "event_description": "会员新增购票人（家属/同伴），用于购票时关联",
+    "system": "jianengliang",
+    "phase": "batch3",
+    "trigger": {
+      "conditions": ["member_exists"],
+      "probability_keys": ["add_ticket_person"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_buy_ticket_people",
+        "action": "insert",
+        "rows": "ticket_people_count",
+        "row_rule": "one_per_person",
+        "condition": "add_ticket_person=true",
+        "required": false
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id"],
+    "key_generation": {
+      "btp_id": "auto_increment_start_1001"
+    },
+    "preconditions": ["member_exists"],
+    "postconditions": [],
+    "follow_up_events": ["EVT_order_btp_link"],
+    "phase1_scope": "in_scope",
+    "notes": "buy_ticket_people.sex 为 VARCHAR('男'/'女'/'未知')，非整数枚举。type 字段：1身份证/2驾驶证。ticket_people_count 由实例 add_ticket_person 概率和行为决策确定（1-3人）。"
+  },
+
+  {
+    "event_id": "JN_EVT_004",
+    "event_name": "EVT_open_time_card",
+    "event_description": "会员开通次卡（闲时卡），获得时段内抵扣权益",
+    "system": "jianengliang",
+    "phase": "batch3",
+    "trigger": {
+      "conditions": ["member_exists", "consumption_frequency=high OR consumption_frequency=medium"],
+      "probability_keys": ["use_time_card"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_time_card",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_time_card=true AND (consumption_frequency=high OR consumption_frequency=medium)",
+        "required": false
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id", "card_id"],
+    "key_generation": {
+      "card_id": "auto_increment_start_5001",
+      "time_card_record_id": "j_member_time_card.id auto_increment"
+    },
+    "preconditions": ["member_exists"],
+    "postconditions": ["card_id_unique"],
+    "follow_up_events": ["EVT_book_field", "EVT_buy_swim_ticket"],
+    "phase1_scope": "in_scope",
+    "notes": "j_member_time_card 无 remain_num 字段。limit_num=单日使用限制次数，discount_time=单次可抵扣最大时长（decimal）。status=0（待激活）初始值。stime/etime 为可用时段开始/结束时间字符串（如'06:00'/'22:00'）。card_id 引用次卡售卖 ID（字典数据，非 j_member_time_card.id）。"
+  },
+
+  {
+    "event_id": "JN_EVT_005",
+    "event_name": "EVT_receive_coupon",
+    "event_description": "会员领取优惠券，从 j_coupon_code 模板生成一张用户优惠券",
+    "system": "jianengliang",
+    "phase": "batch4",
+    "trigger": {
+      "conditions": ["member_exists", "j_coupon_code_exists"],
+      "probability_keys": ["use_coupon"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_coupon",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_coupon=true",
+        "required": false
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id", "coupon_id", "code_id"],
+    "key_generation": {
+      "coupon_id": "auto_increment_start_30001"
+    },
+    "preconditions": ["member_exists", "j_coupon_code_exists"],
+    "postconditions": ["status=1（未使用）", "expire_time > start_time", "expire_time > create_time"],
+    "follow_up_events": ["EVT_book_field", "EVT_buy_swim_ticket", "EVT_buy_event_ticket"],
+    "phase1_scope": "in_scope",
+    "notes": "j_coupon.status 初始=1（未使用）。j_coupon.user_id 引用 j_member.id（INT）。j_coupon.grantId 填默认值1。rec_type=1（注册）或3（发老用户）。"
+  },
+
+  {
+    "event_id": "JN_EVT_006",
+    "event_name": "EVT_book_field",
+    "event_description": "会员订场并支付，生成订场订单全链路",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "order_type": ["2"],
+      "conditions": ["member_exists", "venue_exists", "sport_exists"],
+      "probability_keys": ["complete_payment", "use_coupon", "use_time_card", "add_ticket_people", "accumulate_points"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_order",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true
+      },
+      {
+        "table": "ods_wenti_j_order_field",
+        "action": "insert",
+        "rows": "field_slot_count",
+        "row_rule": "one_per_field_slot",
+        "condition": null,
+        "required": true,
+        "notes": "通常1条，多时段预约可多条，均共享同一 order_num"
+      },
+      {
+        "table": "ods_wenti_j_order_coupon",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_coupon=true AND coupon_available=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_order_card_expense",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_time_card=true AND time_card_available=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_time_card_use",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_time_card=true AND time_card_available=true",
+        "required": false,
+        "notes": "DEC-P2-05已决策：与 j_order_card_expense 同批次写入，order_num一致"
+      },
+      {
+        "table": "ods_wenti_j_order_btp",
+        "action": "insert",
+        "rows": "ticket_people_count",
+        "row_rule": "one_per_ticket_person",
+        "condition": "add_ticket_people=true AND ticket_people_exist=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_points_records",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "complete_payment=true AND accumulate_points=true",
+        "required": false,
+        "notes": "DEC-P2-03已决策：条件由编排器判断，target_tables中按条件包含/排除"
+      }
+    ],
+    "state_updates": [
+      {
+        "table": "ods_wenti_j_coupon",
+        "condition": "use_coupon=true",
+        "idempotent_key": "coupon_id",
+        "fields": {"status": 2, "use_time": "order_time", "use_type": 2},
+        "notes": "use_type=2（订场）"
+      }
+    ],
+    "shared_keys": ["member_id", "phone", "venue_id", "order_num", "coupon_id", "time_card_record_id"],
+    "key_generation": {
+      "order_id": "auto_increment_start_50001",
+      "order_num": "JN+yyyyMMddHHmmss+3位序号"
+    },
+    "preconditions": ["member_exists", "venue_exists", "sport_exists"],
+    "postconditions": [
+      "j_order_field.order_num == j_member_order.order_num",
+      "pay_amount = cost - discount_amount - deducted_amount",
+      "is_pay=1 时 pay_time > create_time",
+      "is_pay=0 时 pay_time=NULL",
+      "use_coupon=true 时 j_order_coupon 存在且 j_coupon.status=2"
+    ],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "j_member_order_detail 不适用于订场（DEC-P2-04：只有游泳票）。j_member_order.venue_id 为 INT 类型（DDL确认）。"
+  },
+
+  {
+    "event_id": "JN_EVT_007",
+    "event_name": "EVT_buy_swim_ticket",
+    "event_description": "会员购买游泳票并支付，生成游泳票订单全链路",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "order_type": ["3"],
+      "conditions": ["member_exists", "venue_exists", "sport_exists"],
+      "probability_keys": ["complete_payment", "use_coupon", "use_time_card", "add_ticket_people", "accumulate_points"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_order",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true
+      },
+      {
+        "table": "ods_wenti_j_member_order_detail",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_order",
+        "condition": null,
+        "required": true,
+        "notes": "DEC-P2-04已决策：只有游泳票(type=3)才生成此表。填充 swim_ticket_desc/swim_ticket_expire_date/swim_ticket_amount。"
+      },
+      {
+        "table": "ods_wenti_j_order_ticket",
+        "action": "insert",
+        "rows": "quantity",
+        "row_rule": "one_per_ticket",
+        "condition": null,
+        "required": true,
+        "notes": "每张票独立 ticket_num，remain_num=1（剩余核销次数，非次卡次数）"
+      },
+      {
+        "table": "ods_wenti_j_order_coupon",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_coupon=true AND coupon_available=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_order_card_expense",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_time_card=true AND time_card_available=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_time_card_use",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_time_card=true AND time_card_available=true",
+        "required": false,
+        "notes": "DEC-P2-05：与 j_order_card_expense 同批次写入"
+      },
+      {
+        "table": "ods_wenti_j_order_btp",
+        "action": "insert",
+        "rows": "ticket_people_count",
+        "row_rule": "one_per_ticket_person",
+        "condition": "add_ticket_people=true AND ticket_type IN [2,3] AND ticket_people_exist=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_points_records",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "complete_payment=true AND accumulate_points=true",
+        "required": false
+      }
+    ],
+    "state_updates": [
+      {
+        "table": "ods_wenti_j_coupon",
+        "condition": "use_coupon=true",
+        "idempotent_key": "coupon_id",
+        "fields": {"status": 2, "use_time": "order_time", "use_type": 3},
+        "notes": "use_type=3（游泳票）"
+      }
+    ],
+    "shared_keys": ["member_id", "phone", "venue_id", "order_num", "ticket_num_list", "coupon_id", "time_card_record_id"],
+    "key_generation": {
+      "order_id": "auto_increment_start_50001",
+      "order_num": "JN+yyyyMMddHHmmss+3位序号",
+      "ticket_num": "TK+yyyyMMddHHmmss+4位序号（每张票独立）"
+    },
+    "preconditions": ["member_exists", "venue_exists", "sport_exists"],
+    "postconditions": [
+      "j_order_ticket.order_num == j_member_order.order_num（每张票）",
+      "j_member_order_detail.order_num == j_member_order.order_num",
+      "j_order_ticket 条数 == quantity",
+      "pay_amount = cost - discount_amount - deducted_amount",
+      "is_pay=1 时 pay_time > create_time"
+    ],
+    "follow_up_events": ["EVT_redeem_ticket"],
+    "phase1_scope": "in_scope",
+    "notes": "j_order_ticket.remain_num=1（剩余核销次数）。j_order_ticket.card_id 在使用次卡时填 j_member_time_card.id（INT）。j_order_card_expense.vip_card_id 为 VARCHAR（B端卡ID体系，与 j_member_time_card.id 含义不同）。"
+  },
+
+  {
+    "event_id": "JN_EVT_008",
+    "event_name": "EVT_buy_event_ticket",
+    "event_description": "会员购买演艺/赛事票，生成票务订单全链路",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "order_type": ["5", "6"],
+      "conditions": ["member_exists", "venue_exists"],
+      "probability_keys": ["complete_payment", "use_coupon", "add_ticket_people", "accumulate_points"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_order",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true,
+        "notes": "type=5（演艺）或6（赛事），status 使用30-42枚举"
+      },
+      {
+        "table": "ods_wenti_j_order_ticket",
+        "action": "insert",
+        "rows": "quantity",
+        "row_rule": "one_per_ticket",
+        "condition": null,
+        "required": true
+      },
+      {
+        "table": "ods_wenti_j_order_coupon",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "use_coupon=true AND coupon_available=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_order_btp",
+        "action": "insert",
+        "rows": "ticket_people_count",
+        "row_rule": "one_per_ticket_person",
+        "condition": "add_ticket_people=true AND ticket_people_exist=true",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_points_records",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "complete_payment=true AND accumulate_points=true",
+        "required": false
+      }
+    ],
+    "state_updates": [
+      {
+        "table": "ods_wenti_j_coupon",
+        "condition": "use_coupon=true",
+        "idempotent_key": "coupon_id",
+        "fields": {"status": 2, "use_time": "order_time", "use_type": "5_or_6"},
+        "notes": "use_type=5（演艺）或6（赛事），与 order_type 保持一致"
+      }
+    ],
+    "shared_keys": ["member_id", "phone", "venue_id", "order_num", "ticket_num_list", "coupon_id"],
+    "key_generation": {
+      "order_id": "auto_increment_start_50001",
+      "order_num": "JN+yyyyMMddHHmmss+3位序号",
+      "ticket_num": "TK+yyyyMMddHHmmss+4位序号"
+    },
+    "preconditions": ["member_exists", "venue_exists"],
+    "postconditions": [
+      "j_order_ticket.order_num == j_member_order.order_num",
+      "j_order_ticket 条数 == quantity",
+      "status 在30-42范围内"
+    ],
+    "follow_up_events": ["EVT_redeem_ticket"],
+    "phase1_scope": "in_scope",
+    "notes": "DEC-P2-04已决策：演艺/赛事订单不生成 j_member_order_detail（只有游泳票）。演艺赛事不使用次卡，j_order_card_expense/j_time_card_use 不包含。"
+  },
+
+  {
+    "event_id": "JN_EVT_009",
+    "event_name": "EVT_abandoned_order",
+    "event_description": "未支付/取消/超时订单（脏数据 Persona 驱动）",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "order_type": ["2", "3", "5", "6"],
+      "conditions": ["member_exists"],
+      "probability_keys": ["dirty_data_probability >= 0.10 OR complete_payment=false"]
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_order",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true,
+        "notes": "status=0（待支付）或3（超时）或8（用户取消），is_pay=0，pay_time=NULL"
+      },
+      {
+        "table": "ods_wenti_j_member_order_detail",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_order",
+        "condition": "order_type=3",
+        "required": false,
+        "notes": "只有游泳票(type=3)才生成，其他类型不生成"
+      },
+      {
+        "table": "ods_wenti_j_order_field",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "order_type=2",
+        "required": false
+      },
+      {
+        "table": "ods_wenti_j_order_ticket",
+        "action": "insert",
+        "rows": "quantity",
+        "row_rule": "one_per_ticket",
+        "condition": "order_type IN [3,5,6]",
+        "required": false,
+        "notes": "status=0（未使用），保留票记录但订单未支付"
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["member_id", "phone", "venue_id", "order_num"],
+    "key_generation": {
+      "order_num": "JN+yyyyMMddHHmmss+3位序号"
+    },
+    "preconditions": ["member_exists"],
+    "postconditions": [
+      "is_pay=0",
+      "pay_time=NULL",
+      "trade_no=NULL"
+    ],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "无优惠券/积分/次卡附加行为（未支付不触发任何附加表）。目标约占总订单14%。"
+  },
+
+  {
+    "event_id": "JN_EVT_010",
+    "event_name": "EVT_refund_order",
+    "event_description": "已支付订单申请并完成退款",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "conditions": ["paid_order_exists", "dirty_data_probability >= 0.15 OR refund_intent=true"],
+      "probability_keys": []
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_member_order",
+        "action": "update",
+        "rows": 1,
+        "row_rule": "update_existing_by_order_num",
+        "condition": "is_pay=1",
+        "required": true,
+        "notes": "DEC-P2-02已决策：全由代码执行，幂等键=order_num。修改 status='6', is_refund=1"
+      },
+      {
+        "table": "ods_wenti_j_member_order_refund",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": null,
+        "required": true
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["order_num"],
+    "key_generation": {
+      "refund_order_num": "REFUND+yyyyMMddHHmmss+3位序号"
+    },
+    "preconditions": ["order_exists_with_is_pay=1"],
+    "postconditions": [
+      "j_member_order.status='6'",
+      "j_member_order.is_refund=1",
+      "j_member_order_refund.refund_time >= j_member_order.pay_time",
+      "j_member_order_refund.refund_amount <= j_member_order.pay_amount"
+    ],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "update 操作由代码直接执行（读内存对象），不经过LLM。j_member_order_refund.status=0（待审核）初始，is_success=1（模拟审核通过）。"
+  },
+
+  {
+    "event_id": "JN_EVT_011",
+    "event_name": "EVT_redeem_ticket",
+    "event_description": "散票核销：对已购游泳票/演艺赛事票进行现场核销",
+    "system": "jianengliang",
+    "phase": "batch6",
+    "trigger": {
+      "conditions": ["j_order_ticket_exists", "ticket_status=0（未使用）"],
+      "probability_keys": [],
+      "redemption_rate": "60%"
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_order_ticket_valid",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_ticket",
+        "condition": null,
+        "required": true
+      },
+      {
+        "table": "ods_wenti_j_order_ticket",
+        "action": "update",
+        "rows": 1,
+        "row_rule": "update_existing_by_ticket_num",
+        "condition": null,
+        "required": true,
+        "notes": "更新 status=1（已使用），remain_num=0（剩余核销次数归零）"
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["order_num", "ticket_num"],
+    "key_generation": {},
+    "preconditions": ["j_order_ticket.ticket_num exists", "j_order_ticket.status=0"],
+    "postconditions": [
+      "j_order_ticket_valid.ticket_num == j_order_ticket.ticket_num",
+      "j_order_ticket_valid.valid_time >= j_member_order.create_time",
+      "j_order_ticket_valid.valid_time <= j_order_ticket.expire_time",
+      "j_order_ticket.status=1（已使用）"
+    ],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "约60%的游泳票/演艺赛事票生成核销记录。operator_id/operator_name 填模拟核销员（字典数据或固定值）。is_valid=1。"
+  },
+
+  {
+    "event_id": "JN_EVT_012",
+    "event_name": "EVT_guanjia_sync",
+    "event_description": "馆佳平台订单同步记录",
+    "system": "jianengliang",
+    "phase": "batch5",
+    "trigger": {
+      "conditions": ["paid_order_exists"],
+      "probability_keys": [],
+      "sync_rate": "约50%的已支付订单同步"
+    },
+    "table_actions": [
+      {
+        "table": "ods_wenti_j_order_guanjia",
+        "action": "insert",
+        "rows": 1,
+        "row_rule": "one_per_event",
+        "condition": "is_pay=1",
+        "required": false
+      }
+    ],
+    "state_updates": [],
+    "shared_keys": ["order_num", "user_id", "venue_id", "coupon_id"],
+    "key_generation": {},
+    "preconditions": ["paid_order_exists"],
+    "postconditions": [
+      "j_order_guanjia.order_num == j_member_order.order_num（唯一索引）"
+    ],
+    "follow_up_events": [],
+    "phase1_scope": "in_scope",
+    "notes": "j_order_guanjia 有 UNIQUE INDEX on order_num。is_give_points 初始=0。type 和 status 与 j_member_order 保持一致。可与对应的订单事件合并生成（同一次Prompt D调用输出）。"
+  }
+]

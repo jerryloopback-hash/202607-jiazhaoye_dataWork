@@ -1,0 +1,37 @@
+[
+  {
+    "merchant_id": "M001",
+    "merchant_name": "佳兆业文体集团总部",
+    "merchant_type": "集团总部",
+    "city": "深圳市",
+    "contact_phone": "0755-88888001"
+  },
+  {
+    "merchant_id": "M002",
+    "merchant_name": "佳兆业南山文体中心",
+    "merchant_type": "区域运营",
+    "city": "深圳市",
+    "contact_phone": "0755-88888002"
+  },
+  {
+    "merchant_id": "M003",
+    "merchant_name": "佳兆业福田文体中心",
+    "merchant_type": "区域运营",
+    "city": "深圳市",
+    "contact_phone": "0755-88888003"
+  },
+  {
+    "merchant_id": "M004",
+    "merchant_name": "佳兆业宝安文体中心",
+    "merchant_type": "区域运营",
+    "city": "深圳市",
+    "contact_phone": "0755-88888004"
+  },
+  {
+    "merchant_id": "M005",
+    "merchant_name": "佳兆业龙华文体中心",
+    "merchant_type": "区域运营",
+    "city": "深圳市",
+    "contact_phone": "0755-88888005"
+  }
+]

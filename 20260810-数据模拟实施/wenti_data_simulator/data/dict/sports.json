@@ -1,0 +1,184 @@
+[
+  {
+    "sport_id": "S001",
+    "sport_name": "游泳",
+    "sport_category": "水上运动",
+    "order_type_compatible": [
+      "3"
+    ],
+    "notes": "需要购买游泳票(order_type=3)"
+  },
+  {
+    "sport_id": "S002",
+    "sport_name": "羽毛球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S003",
+    "sport_name": "篮球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S004",
+    "sport_name": "网球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S005",
+    "sport_name": "乒乓球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S006",
+    "sport_name": "健身",
+    "sport_category": "健身运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S007",
+    "sport_name": "瑜伽",
+    "sport_category": "健身运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S008",
+    "sport_name": "舞蹈",
+    "sport_category": "健身运动",
+    "order_type_compatible": [
+      "5"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S009",
+    "sport_name": "武术",
+    "sport_category": "格斗运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S010",
+    "sport_name": "跆拳道",
+    "sport_category": "格斗运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S011",
+    "sport_name": "综合格斗",
+    "sport_category": "格斗运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S012",
+    "sport_name": "跑步",
+    "sport_category": "田径运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买单次入场或次卡(order_type=3,4)"
+  },
+  {
+    "sport_id": "S013",
+    "sport_name": "攀岩",
+    "sport_category": "极限运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可购买单次入场或次卡(order_type=3,4)"
+  },
+  {
+    "sport_id": "S014",
+    "sport_name": "击剑",
+    "sport_category": "格斗运动",
+    "order_type_compatible": [
+      "2",
+      "6"
+    ],
+    "notes": "可购买私教课或订场(order_type=1,2)"
+  },
+  {
+    "sport_id": "S015",
+    "sport_name": "体操",
+    "sport_category": "健身运动",
+    "order_type_compatible": [
+      "5",
+      "6"
+    ],
+    "notes": "可购买私教课或次卡(order_type=1,4)"
+  },
+  {
+    "sport_id": "S016",
+    "sport_name": "排球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S017",
+    "sport_name": "足球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S018",
+    "sport_name": "冰壶",
+    "sport_category": "冰雪运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "可订场或购买单次体验(order_type=2,3)"
+  },
+  {
+    "sport_id": "S019",
+    "sport_name": "台球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  },
+  {
+    "sport_id": "S020",
+    "sport_name": "壁球",
+    "sport_category": "球类运动",
+    "order_type_compatible": [
+      "2"
+    ],
+    "notes": "需要订场(order_type=2)"
+  }
+]
