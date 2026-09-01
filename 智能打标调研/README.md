@@ -12,7 +12,7 @@
 1. **方法调研**：联网调研"机器学习给用户打标"工程上常用的方法，提炼可复用方法库。
 2. **两个场景 + 两类标签 + 两种方法**：
    - **场景 A（DWS 直算，不需 ER 层）**：产出【行为/属性类标签】，方法=无监督聚类（备选预测）。
-   - **场景 B（DWS 直算，不需 ER 层）**：产出【概率型流失标签】，方法=**XGBoost 预测模型**（已由「图嵌入」调整）。
+   - **场景 B（DWS 直算，不需 ER 层）**：产出【概率型流失标签】，方法=**XGBoost 预测模型**（已由「图嵌入」调整），另有逻辑回归/随机森林/RFM规则评分卡三方法可一参切换对比。
 3. **打标模拟**：用测试库数据各跑通一条"特征 → 算法 → 标签"链路，验证可行性。
 
 ## 2. 边界与关注点
@@ -93,8 +93,9 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
 │   │       ├── features.csv / split.json       # 特征宽表15维+切分 ✅
 │   │       ├── features_augmented.csv          # LLM增强后特征 ✅
 │   │       ├── sceneB_churn_labels.csv         # 批量打标输出 ✅
-│   │       ├── sceneB_eval_report.txt          # 评估报告(AUC 0.7134) ✅
-│   │       └── model/                          # 版本化模型 model_v<ts>.json + latest.json ✅
+│   │       ├── sceneB_eval_report.txt          # 评估报告 ✅
+│   │       ├── sceneB_model_comparison.txt     # 四方法同台对比报告 ✅
+│   │       └── model/                          # 版本化模型 + latest.json 指针 ✅
 │   └── output/                                 # 场景A产物
 │       ├── sceneA_behavior_labels.csv          # 9008用户标签 ✅
 │       ├── sceneA_feature_cluster_profiles.csv # 2簇画像 ✅
@@ -118,7 +119,7 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
   - 产物：`04_方案设计与实施/output/` 下 4 个文件
 - [x] **场景 B 流失预测·生产型全链路**（ODS 改造→特征→自造标签→XGBoost→评估→批量打标→增量）
   - 全流程设计见 `04_方案设计与实施/场景B_方案设计与打标模拟.md`
-  - 数据：合成 ODS(脚本) + LLM 增强；特征宽表 15 维、防泄漏窗；XGBoost 训练/评估/版本化增量脚本
+  - 数据：合成 ODS(脚本) + LLM 增强；特征宽表 15 维、防泄漏窗
   - SQL：`sceneB/sql/sceneB_ods_to_dws.sql`（ODS→DWS 特征/标签表增量）
   - **本机已真实跑通**（2026-09-01）：XGBoost AUC 0.7134；**四方法同台对比** RF 0.7215 / XGB 0.7134 / LR 0.7084 / RFM规则 0.7044；全量打标 高危24%/中危37%/低危39%
   - 训练脚本已升级为**路由程序** `sceneB_model_router.py`：`--model {xgboost,lr,rf,rule}` 一参选方法、`--mode train/predict` 分离训练与日常打标、`--compare` 同台对比
