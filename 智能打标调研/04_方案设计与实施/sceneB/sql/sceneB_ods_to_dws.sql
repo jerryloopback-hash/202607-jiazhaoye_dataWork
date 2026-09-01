@@ -1,15 +1,16 @@
 -- ============================================================================
 -- 场景B · 从 ODS 层改造数据：特征宽表 + 自造标签表（增量）
 -- ============================================================================
--- 目标：loss 预测 的原料。把 ODS 层原始行为事件，加工成：
---   表1 dws_user_churn_feature  —— 用户×观察窗特征宽表（供 XGBoost 训练/推理）
---   表2 dws_user_churn_label    —— 用户×标签窗 自造标签 y（流失=1）
+-- 目标：churn 流失预测 的原料。把 ODS 层原始行为事件，加工成：
+--   表1 dws_user_churn_feature   —— 用户×观察窗特征宽表（供 XGBoost 训练/推理）
+--   表2 dws_user_churn_label     —— 用户×标签窗 自造标签 y（流失=1）
+--   表3 dws_user_churn_label_result —— 模型打标结果表（供 CDP 圈选，与打标 CSV 同 schema）
 -- 数据源：ods_wenti_jianengliang_*（C 端：会员/订单/游泳票/活动/积分/次卡）
 --
 -- 时间窗定义（按 as_of_date 基准日滚动，防泄漏关键）：
 --   观察窗 = [as_of_date - 180, as_of_date - 1]   → 只算特征
 --   标签窗 = [as_of_date,        as_of_date + 30]  → 只算 y
--- https 增量：每日调度触发，按 as_of_date 增量写入；标签需等 30 天成熟才可算。
+-- 增量：每日调度触发，按 as_of_date 增量写入；标签需等 30 天成熟才可算。
 -- 说明：此为工程化 DDL+DML 骨架，字段/表名对应项目 schema 与注释；
 --       生产替换占位注释中的示例查询即可。StarRocks 语法。
 -- ============================================================================
@@ -61,6 +62,22 @@ CREATE TABLE IF NOT EXISTS dws_user_churn_label (
 ) ENGINE=OLAP DUPLICATE KEY(user_id, as_of_date)
 DISTRIBUTED BY HASH(user_id) BUCKETS 10
 PROPERTIES("replication_num"="1");
+
+-- ---------------------------------------------------------------------------
+-- 3) 标签结果表（训练脚本批量打标的落库目标；CDP 从此表位图圈选高危流失人群）
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dws_user_churn_label_result (
+    user_id       BIGINT       COMMENT '内部用户id',
+    as_of_date    DATE         COMMENT '打标基准日',
+    churn_prob    DOUBLE       COMMENT '流失概率(0~1)',
+    churn_label   VARCHAR(16)  COMMENT '分档：高危流失/中危流失/低危-稳定',
+    model_version VARCHAR(32)  COMMENT '打标所用模型版本',
+    update_time   DATETIME     COMMENT '写入时间'
+) ENGINE=OLAP DUPLICATE KEY(user_id, as_of_date)
+DISTRIBUTED BY HASH(user_id) BUCKETS 10
+PROPERTIES("replication_num"="1");
+-- 写入方式：训练脚本产出 sceneB_churn_labels.csv 后 Stream Load / 或 Python 直连 INSERT；
+-- 回滚 = 按 model_version 过滤（下线新版本批次、查询指定旧版本即可）。
 
 -- ---------------------------------------------------------------------------
 -- 2) 增量写入示例（每日调度；as_of_date 取前一天，因要确保观察窗数据已落）

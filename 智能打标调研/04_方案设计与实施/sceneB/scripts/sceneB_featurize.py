@@ -4,8 +4,8 @@
 ============================================================
 输入：output/raw/{users,events,label}.csv（由 sceneB_synth_data.py 生成，模拟 ODS 层）
 输出：
-  output/features.csv      —— 用户×特征 宽表（含自造标签 y 与 uid 标签重量）
-  output/split.json        —— 训练/验证/测试 切分（用户 uid 集合，随时间切分防泄漏）
+  output/features.csv      —— 用户×特征 宽表（含自造标签 y 与 uid）
+  output/split.json        —— 训练/验证/测试 切分（用户 uid 集合，随机分层）
 
 特征设计（对应 DWS 特征宽表的一人一行业务口径）：
   - 静态属性：age, sex

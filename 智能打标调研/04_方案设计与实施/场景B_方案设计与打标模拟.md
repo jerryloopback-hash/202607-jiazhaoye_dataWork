@@ -120,7 +120,7 @@ python scripts/sceneB_train_xgboost.py
 | 流失率(y=1) | 39.4%（类平衡良好） |
 | 切分 | train 8400 / valid 1800 / test 1800 |
 | 数据来源 | 合成脚本(latent 驱动) + LLM 增强模块(当前 mock 回退) |
-| 标签输出 | `sceneB_churn_labels.csv`（12k 用户，含 prob/分档/版本/日期） |
+| 标签输出 | `sceneB_churn_labels.csv`（12k 用户，含 prob/分档/版本/日期）——**待 xgboost 环境运行训练脚本生成** |
 
 > ⚠️ **定位说明**：本 demo 用合成数据跑通**生产型全链路**（从 ODS 改造→训练→打标→增量→版本化）。
 > 由于测试库数据质量差且本机无法直连/无 ML 依赖，真实生产训练需在生产库/训练机重跑同一套代码，
@@ -129,6 +129,8 @@ python scripts/sceneB_train_xgboost.py
 ---
 
 ## 6. 生产化落地点
+
+> 服务器部署、环境依赖、建表回填、调度编排、监控回滚的**完整操作步骤**见 **[生产部署运行手册](sceneB/生产部署运行手册.md)**。
 
 1. 把 `dws_user_churn_feature` 与 `dws_user_churn_label` 建到生产 DWS，按 `as_of_date` 每日增量。
 2. 训练脚本读生产宽表替换 `features.csv`；输出写回 `dws_user_churn_label_result`。
@@ -146,4 +148,4 @@ python scripts/sceneB_train_xgboost.py
 | 算法 | XGBoost | 梯度提升树，CPU 即可；轻量变体(LGBM/CatBoost)骨架通用 |
 | 增量/输出 | 离线批量 + 增量重训 | 标签表版本化，可回滚可回溯 |
 
-*文档维护：2026-08-31。关联：[[智能打标调研/PLAN]]、[[03_场景与标签需求/场景标签与方法匹配]]、[[02_方法调研/方法流程与可行性]]、[[智能打标调研/README]]。*
+*文档维护：2026-08-31（2026-09-01 补生产部署运行手册、SQL 补结果表、校正产物状态）。关联：[[智能打标调研/PLAN]]、[[03_场景与标签需求/场景标签与方法匹配]]、[[02_方法调研/方法流程与可行性]]、[[智能打标调研/README]]。*

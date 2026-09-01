@@ -82,14 +82,16 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
 │   │   │   ├── sceneB_featurize.py             # 特征宽表+自造标签(防泄漏)
 │   │   │   ├── sceneB_llm_augment.py           # LLM增强(pluggable+mock回退)
 │   │   │   └── sceneB_train_xgboost.py         # XGBoost训练+评估+增量重训
-│   │   ├── sql/sceneB_ods_to_dws.sql           # ODS→DWS特征/标签表增量SQL
+│   │   ├── sql/sceneB_ods_to_dws.sql           # ODS→DWS特征/标签/结果表增量SQL
+│   │   ├── 生产部署运行手册.md                  # 上服务器→生产调度的操作手册 ✅
 │   │   ├── config/llm_config.json              # 本地LLM接入配置
 │   │   └── output/                             # 场景B产物
 │   │       ├── raw/                            # 模拟ODS原始层(users/events/label)
-│   │       ├── features.csv / split.json       # 特征宽表+切分
+│   │       ├── features.csv / split.json       # 特征宽表+切分 ✅
 │   │       ├── features_augmented.csv          # LLM增强后特征 ✅
-│   │       ├── sceneB_churn_labels.csv         # 批量打标签输出 ✅
-│   │       └── sceneB_eval_report.txt          # 评估报告(需xgboost环境)
+│   │       ├── sceneB_churn_labels.csv         # 批量打标输出(待xgboost环境运行生成)
+│   │       ├── sceneB_eval_report.txt          # 评估报告(同上)
+│   │       └── model/                          # 版本化模型 model_v<ts>.json + latest.json(同上)
 │   └── output/                                 # 场景A产物
 │       ├── sceneA_behavior_labels.csv          # 9008用户标签 ✅
 │       ├── sceneA_feature_cluster_profiles.csv # 2簇画像 ✅
@@ -115,11 +117,12 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
   - 全流程设计见 `04_方案设计与实施/场景B_方案设计与打标模拟.md`
   - 数据：合成 ODS(脚本) + LLM 增强；特征宽表 14 维、防泄漏窗；XGBoost 训练/评估/版本化增量脚本
   - SQL：`sceneB/sql/sceneB_ods_to_dws.sql`（ODS→DWS 特征/标签表增量）
-  - 产物：`sceneB/output/` 下 raw/特征/切分/增强标签/打标 CSV
+  - 产物：`sceneB/output/` 下 raw/特征/切分/增强标签（打标 CSV/评估报告/模型待 xgboost 环境运行生成）
 - [x] **项目总结报告**（整合阶段 1+2 全部成果，汇报核心文档）
+- [x] **生产部署运行手册**（场景 B 上服务器→建表回填→训练→生产调度的操作手册，2026-09-01）
 
 ### 📋 可选扩展（按需）
-- [ ] 场景 B 接生产库：把合成数据替换为生产 DWS 特征/标签宽表重跑真实训练
+- [ ] 场景 B 接生产库：上线路线已定（见 [PLAN 阶段 5](PLAN.md) 与 [生产部署运行手册](04_方案设计与实施/sceneB/生产部署运行手册.md)）——生产 DWS 建表/回填 → 首训 → 每日打标 + 周级重训调度
 - [ ] 场景 B 接入本地 LLM：配置 `sceneB/config/llm_config.json` 置 `enabled=true`
 - [ ] 场景 5 高价值会员分层（RFM+聚类）
 - [ ] 多场景标签效果回测方案设计
