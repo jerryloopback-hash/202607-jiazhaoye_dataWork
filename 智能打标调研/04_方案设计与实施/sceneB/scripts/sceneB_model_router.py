@@ -176,12 +176,10 @@ def predict_proba(method, model, X):
 
 def feature_importance(method, model):
     """返回 [(特征, 重要性)]（rule 用分箱说明替代；lr 用 |系数|）。"""
-    if method == "xgboost":
-        return sorted(zip(FEATURE_NAMES, model.feature_importances_), key=lambda t: -t[1])
-    if method == "rf":
+    if method in ("xgboost", "rf"):
         return sorted(zip(FEATURE_NAMES, model.feature_importances_), key=lambda t: -t[1])
     if method == "lr":
-        coef = model.named_modules()["clf"].coef_[0] if False else model.named_steps["clf"].coef_[0]
+        coef = model.named_steps["clf"].coef_[0]
         return sorted(zip(FEATURE_NAMES, abs(coef)), key=lambda t: -t[1])
     return [("RFM规则(R近行为0.4/F频次0.35/M金额0.25)", 1.0)]
 
@@ -292,14 +290,10 @@ def write_eval(method, version, ev, y_te, imp):
     return path
 
 
-def dist_summary(proba_or_labels):
-    """统计分档占比。"""
+def dist_summary(values):
+    """统计分档占比（输入为概率列表）。"""
     from collections import Counter
-    if hasattr(proba_or_labels[0], "item") or isinstance(proba_or_labels[0], float):
-        labels = [churn_label(float(p)) for p in proba_or_labels]
-    else:
-        labels = proba_or_labels
-    c = Counter(labels)
+    c = Counter(churn_label(float(p)) for p in values)
     n = sum(c.values())
     return f"高危{100*c.get('高危流失',0)/n:.1f}%/中危{100*c.get('中危流失',0)/n:.1f}%/低危{100*c.get('低危/稳定',0)/n:.1f}%"
 
@@ -357,7 +351,7 @@ def run_compare(df, split):
              *[f"{METHOD_DESC[m]:<24}{auc:>8.4f}{pr:>9.4f}{dt:>12.1f}   {dist_summary(p)}"
                for m, auc, pr, dt, p in results],
              "",
-             f"结论: AUC 最优 = {METHOD_DESC[best_m]}；latest.json 已指向该方法（line {best_m}）。",
+             f"结论: AUC 最优 = {METHOD_DESC[best_m]}；latest.json 已指向该方法（{best_m}）。",
              "分档口径: 高危流失≥0.7 / 中危流失≥0.4 / 低危-稳定<0.4"]
     path = os.path.join(OUT, "sceneB_model_comparison.txt")
     with open(path, "w", encoding="utf-8") as f:
