@@ -78,10 +78,10 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
 │   │   └── sceneA_clustering_demo.py           # 场景A完整打标脚本 ✅
 │   ├── sceneB/                                 # 场景B 自包含子目录
 │   │   ├── 脚本 scripts/
-│   │   │   ├── sceneB_synth_data.py            # 模拟ODS数据生成(纯stdlib)
+│   │   │   ├── sceneB_synth_data.py            # 模拟ODS数据生成(纯stdlib,趋势衰减建模)
 │   │   │   ├── sceneB_featurize.py             # 特征宽表+自造标签(防泄漏)
 │   │   │   ├── sceneB_llm_augment.py           # LLM增强(pluggable+mock回退)
-│   │   │   └── sceneB_train_xgboost.py         # XGBoost训练+评估+增量重训
+│   │   │   └── sceneB_train_xgboost.py         # XGBoost训练+评估+增量重训(版本自适应)
 │   │   ├── sql/sceneB_ods_to_dws.sql           # ODS→DWS特征/标签/结果表增量SQL
 │   │   ├── 生产部署运行手册.md                  # 上服务器→生产调度的操作手册 ✅
 │   │   ├── 环境安装指南.md                      # venv/依赖/LLM接入 实测记录 ✅
