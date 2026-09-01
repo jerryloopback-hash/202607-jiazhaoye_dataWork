@@ -61,10 +61,11 @@
 - 详细 DDL/DML 与增量见：`sql/sceneB_ods_to_dws.sql`。
 
 ### 3.2 特征工程（一人一行宽表）
-14 维特征，与 DWS 特征宽表口径一一对应：
-`age, sex, login_num, n_events, n_order, n_swim, n_activity, n_points, n_timecard,
+15 维特征，与 DWS 特征宽表口径一一对应：
+`age, sex, login_num, n_events, n_events_30d, n_order, n_swim, n_activity, n_points, n_timecard,
  spend_total, spend_mean, spend_max, recency_days, behavior_diversity`
-（金额用 `log1p` 压缩长尾，与场景 A 一致；`recency_days`=最近一次行为距基准日天数，无行为置 999。）
+（`n_events_30d`=观察窗最近 30 天事件数，流失最强信号；金额用 `log1p` 压缩长尾，与场景 A 一致；
+`recency_days`=最近一次行为距基准日天数，无行为置 999。）
 实现：`scripts/sceneB_featurize.py`
 
 ### 3.3 训练 + 评估
@@ -94,37 +95,38 @@
 
 ---
 
-## 4. 运行（在具备 xgboost/sklearn 的环境）
+## 4. 运行（本机已跑通，环境安装见 `sceneB/环境安装指南.md`）
 
 ```bash
-# 1) 生成模拟 ODS 数据（纯 stdlib 可跑）
-python scripts/sceneB_synth_data.py
-# 2) 特征工程 + 自造标签
-python scripts/sceneB_featurize.py
-# 3)（可选）LLM 增强：编辑 config/llm_config.json 打开 enabled
-python scripts/sceneB_llm_augment.py
-# 4) XGBoost 训练 + 评估 + 批量打标（需 sklearn/xgboost）
-python scripts/sceneB_train_xgboost.py
+cd sceneB
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：装环境
+.venv/bin/python scripts/sceneB_synth_data.py        # 1) 生成模拟 ODS 数据（纯 stdlib）
+.venv/bin/python scripts/sceneB_featurize.py         # 2) 特征工程 + 自造标签
+.venv/bin/python scripts/sceneB_llm_augment.py       # 3)（可选）LLM 增强，config 已 enabled
+.venv/bin/python scripts/sceneB_train_xgboost.py     # 4) XGBoost 训练 + 评估 + 批量打标
 ```
 
-产物输出到 `04_方案设计与实施/output/`。
+产物输出到 `sceneB/output/`。
 
 ---
 
-## 5. demo 结果（本机产出，链路演示口径）
+## 5. demo 结果（2026-09-01 本机真实运行）
 
 | 项 | 值 |
 |---|---|
-| 用户数 | 12000 |
-| 特征 | 14 维 |
-| 流失率(y=1) | 39.4%（类平衡良好） |
+| 用户数 / 特征 | 12000 / **15 维** |
+| 流失率(y=1) | 47.8%（类平衡良好） |
 | 切分 | train 8400 / valid 1800 / test 1800 |
-| 数据来源 | 合成脚本(latent 驱动) + LLM 增强模块(当前 mock 回退) |
-| 标签输出 | `sceneB_churn_labels.csv`（12k 用户，含 prob/分档/版本/日期）——**待 xgboost 环境运行训练脚本生成** |
+| **AUC / PR-AUC** | **0.7134 / 0.6901**（测试集真实流失率 47.5%） |
+| Top 特征 | `n_events_30d`(0.295) > `n_events` > `recency_days` —— 近30天行为是最强流失信号，符合业务直觉 |
+| 全量打标分布 | 高危流失 24.0% / 中危流失 37.3% / 低危-稳定 38.7% |
+| 模型版本 | `model_20260901_104130.json`（output/model/ 版本化保留） |
+| 数据来源 | 合成脚本（latent+趋势衰减驱动）+ LLM 增强（qwen3.8 已接入） |
+| 产物 | `sceneB_churn_labels.csv` / `sceneB_eval_report.txt` / `model/` 均已生成 ✅ |
 
-> ⚠️ **定位说明**：本 demo 用合成数据跑通**生产型全链路**（从 ODS 改造→训练→打标→增量→版本化）。
-> 由于测试库数据质量差且本机无法直连/无 ML 依赖，真实生产训练需在生产库/训练机重跑同一套代码，
-> 只需替换数据源（读生产 DWS 宽表）。链路、窗口防泄漏、版本化、增量逻辑均已工程化到位。
+> ⚠️ **定位说明**：以上为**合成数据**上的链路验证结果，证明生产型全链路（ODS 改造→训练→打标→版本化→增量）
+> 可运行、方法有效（模型确实学到"近期行为衰减→流失"的信号）；**数值不代表生产效果**。
+> 生产训练只需替换数据源（读生产 DWS 宽表，schema 一致则代码零改动）。
 
 ---
 

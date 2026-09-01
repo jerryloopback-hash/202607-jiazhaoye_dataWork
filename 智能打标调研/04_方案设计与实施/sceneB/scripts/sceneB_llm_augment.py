@@ -11,12 +11,14 @@
 
 接线方式（pluggable）：
   1) 编辑 sceneB/config/llm_config.json：
-       { "enabled": true, "base_url": "http://127.0.0.1:8000/v1",
-         "model": "your-local-model", "api_key": "", "timeout": 60 }
-     兼容 OpenAI /chat/completions 协议（本地 vLLM / Ollama / LM Studio 等常用本地 LLM 均支持）。
+       { "enabled": true, "base_url": "http://10.20.77.89:8888/v1",
+         "model": "Qwen3.8-27B-UD-Q8_K_XL", "api_key": "...", "timeout": 120 }
+     兼容 OpenAI /chat/completions 协议（本地 vLLM / Ollama / LM Studio / unsloth-studio 等均支持）。
   2) 运行：python sceneB_llm_augment.py
   - 当 enabled=false 或请求失败/超时时，自动回退到**启发式 mock 判定**（离线可运行、
     确定性、带 MOCK 标记），保证管线不因 LLM 不可用而中断。
+  ⚠️ unsloth-studio 服务器需先加载模型（POST /v1/load 或网页开启 auto-switch），
+     否则 chat/completions 会挂起——详见 环境安装指南.md §2。
 
 输出：output/features_augmented.csv  —— 含 y_aug(LLM校准后)、llm_reason、llm_source(mock/llm)
 说明：仅对 frac 比例的样本做 LLM 二次判定，其余保持脚本标签，控制增强幅度与成本。
@@ -28,7 +30,7 @@ CFG_PATH = os.path.join(BASE, "config", "llm_config.json")
 SRC = os.path.join(BASE, "output", "features.csv")
 DST = os.path.join(BASE, "output", "features_augmented.csv")
 
-FRAC = 0.3      # 被 LLM 二次判定的样本比例
+FRAC = 0.3      # 被 LLM 二次判定的样本比例（可用 config "frac" 覆盖）
 SEED = 20260831
 
 DEFAULT_CFG = {
@@ -36,7 +38,7 @@ DEFAULT_CFG = {
     "base_url": "http://127.0.0.1:8000/v1", # 本地 LLM OpenAI 兼容端点
     "model": "local-model",
     "api_key": "",
-    "timeout": 60,
+    "timeout": 120,
     "max_batch": 20,
 }
 
@@ -64,7 +66,7 @@ def llm_judge(cfg, profile):
         "model": cfg["model"],
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-        "max_tokens": 120,
+        "max_tokens": int(cfg.get("max_tokens", 300)),
     }).encode("utf-8")
     req = urllib.request.Request(
         cfg["base_url"] + "/chat/completions", data=body,
@@ -74,7 +76,9 @@ def llm_judge(cfg, profile):
     with urllib.request.urlopen(req, timeout=cfg["timeout"]) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
-    # 解析 JSON（容忍代码块包裹）
+    # 解析 JSON（容忍 <think> 推理段与代码块包裹）
+    if "</think>" in content:
+        content = content.split("</think>", 1)[1]
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -104,7 +108,7 @@ def mock_judge(row):
 def build_profile(row):
     return (f"性别={ {0:'未知',1:'男',2:'女'}.get(int(row['sex']),'?') }, "
             f"年龄={int(row['age'])}, 登录次数={int(row['login_num'])}, "
-            f"近180天事件数={int(row['n_events'])} "
+            f"近180天事件数={int(row['n_events'])}、近30天事件数={int(row['n_events_30d'])} "
             f"(订单{int(row['n_order'])}/游泳票{int(row['n_swim'])}/"
             f"活动{int(row['n_activity'])}/积分{int(row['n_points'])}/次卡{int(row['n_timecard'])}), "
             f"消费总额log1p={row['spend_total']}, 最近行为距今={int(row['recency_days'])}天, "
@@ -116,8 +120,9 @@ def main():
     rows = list(csv.DictReader(open(SRC, encoding="utf-8")))
     rng = random.Random(SEED)
 
-    # 可选：仅对 frac 比例样本做 LLM 判定
-    targets = rng.sample(range(len(rows)), int(len(rows) * FRAC)) if cfg["enabled"] else []
+    # 可选：仅对 frac 比例样本做 LLM 判定（比例可在 config 的 "frac" 配置，默认 0.3）
+    frac = float(cfg.get("frac", FRAC))
+    targets = rng.sample(range(len(rows)), int(len(rows) * frac)) if cfg["enabled"] else []
     llm_used = mock_used = 0
 
     for i, r in enumerate(rows):
@@ -149,7 +154,7 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    print(f"LLM增强完成: {len(rows)} 样本")
+    print(f"LLM增强完成: {len(rows)} 样本 (frac={frac})")
     print(f"  写入: {DST}")
     print(f"  LLM判定={llm_used}  mock/保留={mock_used}  (enabled={cfg['enabled']})")
     if cfg["enabled"]:

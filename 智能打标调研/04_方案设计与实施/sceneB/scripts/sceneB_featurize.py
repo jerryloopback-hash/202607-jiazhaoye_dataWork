@@ -11,7 +11,7 @@
   - 静态属性：age, sex
   - 登录活跃：login_num
   - 观察窗行为聚合（仅用 days_ago>=1 的事件，即"过去"，不加标签窗信息）：
-      n_events, n_order, n_swim, n_activity, n_points, n_timecard
+      n_events, n_events_30d(最近30天事件数), n_order, n_swim, n_activity, n_points, n_timecard
       spend_total, spend_mean, spend_max        （金额，log1p 后）
       recency_days                              （最近一次行为距今几天，越接近今天越小=越活跃）
       behavior_diversity                        （涉及的事件类型数 /5）
@@ -31,7 +31,7 @@ os.makedirs(OUT, exist_ok=True)
 
 FEATURE_NAMES = [
     "age", "sex", "login_num",
-    "n_events", "n_order", "n_swim", "n_activity", "n_points", "n_timecard",
+    "n_events", "n_events_30d", "n_order", "n_swim", "n_activity", "n_points", "n_timecard",
     "spend_total", "spend_mean", "spend_max",
     "recency_days", "behavior_diversity",
 ]
@@ -69,11 +69,14 @@ def featurize(uid, u, events):
     cnt = {t: 0 for t in EVENT_TYPES}
     amounts = []
     recent = None          # 最近一次行为距今天数（取最小=mindays）
+    n_30d = 0              # 观察窗最近30天事件数（流失预测的强信号特征）
     for e in events:
         t = e["event_type"]
         d = int(e["days_ago"])
         if t in cnt:
             cnt[t] += 1
+        if d <= 30:
+            n_30d += 1
         amt = float(e["amount"] or 0)
         if amt > 0:
             amounts.append(amt)
@@ -90,6 +93,7 @@ def featurize(uid, u, events):
 
     feats.update({
         "n_events": n_events,
+        "n_events_30d": n_30d,
         "n_order": cnt["order"], "n_swim": cnt["swim_ticket"],
         "n_activity": cnt["activity"], "n_points": cnt["points"],
         "n_timecard": cnt["time_card"],

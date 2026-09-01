@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS dws_user_churn_feature (
     login_num        INT     COMMENT '登录次数(累计)',
     -- 观察窗行为聚合（[as_of-180, as_of-1]）
     n_events         INT     COMMENT '观察窗事件总数',
+    n_events_30d     INT     COMMENT '观察窗最近30天事件数(流失强信号)',
     n_order          INT     COMMENT '订单数',
     n_swim           INT     COMMENT '游泳票票据数',
     n_activity       INT     COMMENT '活动参与数',
@@ -96,6 +97,7 @@ SELECT
     '${AS_OF_DATE}'                        AS as_of_date,
     u.age, u.sex, u.login_num,
     COUNT(e.uid)                          AS n_events,
+    SUM(e.event_date >= DATE_SUB('${AS_OF_DATE}', INTERVAL 30 DAY)) AS n_events_30d,
     SUM(e.et = 'order')                   AS n_order,
     SUM(e.et = 'swim_ticket')             AS n_swim,
     SUM(e.et = 'activity')                AS n_activity,

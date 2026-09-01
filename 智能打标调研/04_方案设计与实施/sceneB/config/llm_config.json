@@ -1,8 +1,11 @@
 {
-  "enabled": false,
-  "base_url": "http://127.0.0.1:8000/v1",
-  "model": "local-model",
-  "api_key": "",
-  "timeout": 60,
-  "max_batch": 20
+  "enabled": true,
+  "base_url": "http://10.20.77.89:8888/v1",
+  "model": "Qwen3.8-27B-UD-Q8_K_XL",
+  "model_note": "即 qwen3.8（27B, unsloth UD-Q8_K_XL 量化）；以 /v1/models 返回的 id 为准，调用前需在服务器上已加载该模型",
+  "api_key": "sk-unsloth-e811f95feb13117bb02a57860ac52601",
+  "timeout": 120,
+  "max_batch": 20,
+  "frac": 0.05,
+  "max_tokens": 300
 }

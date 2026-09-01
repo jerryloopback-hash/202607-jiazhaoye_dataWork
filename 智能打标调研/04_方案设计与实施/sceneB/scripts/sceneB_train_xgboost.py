@@ -38,7 +38,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 # 用于打标的特征列（与 featurize 的 FEATURE_NAMES 一致，不含 uid/y）
 FEATURE_NAMES = [
     "age", "sex", "login_num",
-    "n_events", "n_order", "n_swim", "n_activity", "n_points", "n_timecard",
+    "n_events", "n_events_30d", "n_order", "n_swim", "n_activity", "n_points", "n_timecard",
     "spend_total", "spend_mean", "spend_max",
     "recency_days", "behavior_diversity",
 ]
@@ -67,26 +67,33 @@ def build_sets(df, split):
 
 
 def train(X, y, seed=SEED):
-    model = xgb.XGBClassifier(
+    """版本自适应：兼容 xgboost 1.x 与 >=2.x/3.x（early_stopping/eval_metric 参数位置不同）。"""
+    import inspect
+    init_kwargs = dict(
         n_estimators=300,
         max_depth=5,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
         min_child_weight=3,
-        scale_pos_weight=y["tr"].mean() / (1 - y["tr"].mean()),  # 处理类别不平衡
+        # 正类=流失(1)。scale_pos_weight=负样本数/正样本数，上采样少数类权重
+        scale_pos_weight=(1 - y["tr"].mean()) / y["tr"].mean(),
         objective="binary:logistic",
-        eval_metric="auc",
-        use_label_encoder=False,
         verbosity=0,
         random_state=seed,
     )
-    model.fit(
-        X["tr"], y["tr"],
-        eval_set=[(X["va"], y["va"])],
-        early_stopping_rounds=30,
-        verbose=False,
-    )
+    sig_init = inspect.signature(xgb.XGBClassifier.__init__).parameters
+    if "early_stopping_rounds" in sig_init:          # xgboost >= 1.6
+        init_kwargs["early_stopping_rounds"] = 30
+        init_kwargs["eval_metric"] = "auc"
+    if "use_label_encoder" in sig_init:              # xgboost < 2.0
+        init_kwargs["use_label_encoder"] = False
+    model = xgb.XGBClassifier(**init_kwargs)
+
+    fit_kwargs = dict(eval_set=[(X["va"], y["va"])], verbose=False)
+    if "early_stopping_rounds" in inspect.signature(model.fit).parameters:  # xgboost < 1.6
+        fit_kwargs["early_stopping_rounds"] = 30
+    model.fit(X["tr"], y["tr"], **fit_kwargs)
     return model
 
 
@@ -132,14 +139,22 @@ def write_labels(df_all, model, version, as_of):
     return path
 
 
-def write_eval(eval_rep, y_te, version):
+def write_eval(eval_rep, y_te, version, model=None):
     report = ["场景B 流失预测 · 测试集评估报告", "=" * 55,
               f"模型版本: {version}",
               f"测试集样本: {len(y_te)}  真实流失率: {eval_rep['positive_rate']:.1%}",
               f"AUC: {eval_rep['auc']:.4f}   PR-AUC: {eval_rep['pr_auc']:.4f}",
               "混淆矩阵 (阈0.5, 行=实际 列=预测):",
               f"  {eval_rep['cm'][0][0]:<6}{eval_rep['cm'][0][1]}",
-              f"  {eval_rep['cm'][1][0]:<6}{eval_rep['cm'][1][1]}"]
+              f"  {eval_rep['cm'][1][0]:<6}{eval_rep['cm'][1][1]}",
+              "",
+              "分类报告 (阈0.5):",
+              classification_report(y_te, eval_rep["pred"],
+                                    target_names=["未流失(0)", "流失(1)"], digits=4)]
+    if model is not None:
+        imp = sorted(zip(FEATURE_NAMES, model.feature_importances_), key=lambda t: -t[1])
+        report += ["Top10 特征重要性:",
+                   *[f"  {name:<20}{v:.4f}" for name, v in imp[:10]]]
     path = os.path.join(OUT, "sceneB_eval_report.txt")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(report))
@@ -178,7 +193,7 @@ def main():
     print(f"[4/4] 保存模型 + 批量打标 ...")
     mpath = save_model(model, version)
     lpath = write_labels(df, model, version, as_of)
-    epath = write_eval(ev, y["te"], version)
+    epath = write_eval(ev, y["te"], version, model)
     print(f"  模型: {mpath}")
     print(f"  标签: {lpath}")
     print(f"  报告: {epath}")
