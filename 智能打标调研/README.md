@@ -81,8 +81,9 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
 │   │   │   ├── sceneB_synth_data.py            # 模拟ODS数据生成(纯stdlib,趋势衰减建模)
 │   │   │   ├── sceneB_featurize.py             # 特征宽表+自造标签(防泄漏)
 │   │   │   ├── sceneB_llm_augment.py           # LLM增强(pluggable+mock回退)
-│   │   │   └── sceneB_train_xgboost.py         # XGBoost训练+评估+增量重训(版本自适应)
+│   │   │   └── sceneB_model_router.py          # 训练+打标路由(四方法:--model选,--compare对比)
 │   │   ├── sql/sceneB_ods_to_dws.sql           # ODS→DWS特征/标签/结果表增量SQL
+│   │   ├── 使用说明.md                          # 部署→训练→打标→增量 完整操作手册 ✅
 │   │   ├── 生产部署运行手册.md                  # 上服务器→生产调度的操作手册 ✅
 │   │   ├── 环境安装指南.md                      # venv/依赖/LLM接入 实测记录 ✅
 │   │   ├── requirements.txt                    # 依赖锁定版本(本机实测) ✅
@@ -119,9 +120,10 @@ Mysql数据库：192.168.112.101  3306   mysql5.7
   - 全流程设计见 `04_方案设计与实施/场景B_方案设计与打标模拟.md`
   - 数据：合成 ODS(脚本) + LLM 增强；特征宽表 15 维、防泄漏窗；XGBoost 训练/评估/版本化增量脚本
   - SQL：`sceneB/sql/sceneB_ods_to_dws.sql`（ODS→DWS 特征/标签表增量）
-  - **本机已真实跑通**（2026-09-01）：AUC 0.7134 / PR-AUC 0.6901，全量打标 高危24%/中危37%/低危39%
-  - 产物：`sceneB/output/` 下 raw/特征/切分/增强标签/打标 CSV/评估报告/版本化模型
-  - 环境：`sceneB/环境安装指南.md`（venv + requirements.txt，服务器可复刻）
+  - **本机已真实跑通**（2026-09-01）：XGBoost AUC 0.7134；**四方法同台对比** RF 0.7215 / XGB 0.7134 / LR 0.7084 / RFM规则 0.7044；全量打标 高危24%/中危37%/低危39%
+  - 训练脚本已升级为**路由程序** `sceneB_model_router.py`：`--model {xgboost,lr,rf,rule}` 一参选方法、`--mode train/predict` 分离训练与日常打标、`--compare` 同台对比
+  - 产物：`sceneB/output/` 下 raw/特征/切分/增强标签/打标 CSV/评估报告/对比报告/版本化模型
+  - 操作文档：`sceneB/使用说明.md`（部署→训练→打标→增量 每步命令）；环境 `sceneB/环境安装指南.md`
 - [x] **本地 LLM 接入**（qwen3.8 @10.20.77.89:8888，OpenAI 兼容；`config/llm_config.json` enabled=true）
 - [x] **项目总结报告**（整合阶段 1+2 全部成果，汇报核心文档）
 - [x] **生产部署运行手册**（场景 B 上服务器→建表回填→训练→生产调度的操作手册，2026-09-01）

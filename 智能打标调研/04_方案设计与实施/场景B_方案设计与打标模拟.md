@@ -68,11 +68,14 @@
 `recency_days`=最近一次行为距基准日天数，无行为置 999。）
 实现：`scripts/sceneB_featurize.py`
 
-### 3.3 训练 + 评估
-- 算法：`XGBClassifier`，early-stopping on validation，`scale_pos_weight` 处理不平衡。
-- 切分：随机分层（同期 cohort 无跨用户时序依赖；防泄漏已在窗口构造阶段完成）。
-- 指标：AUC / PR-AUC / 混淆矩阵 / 特征重要性（可解释性）。
-实现：`scripts/sceneB_train_xgboost.py`
+### 3.3 训练 + 评估（四方法路由程序）
+- **路由程序** `scripts/sceneB_model_router.py`：一个参数选方法，`--mode train/predict` 分离训练与日常打标，`--compare` 四方法同台对比。
+- **方法注册表**：`xgboost`(主方法,梯度提升树) / `lr`(逻辑回归线性基线) / `rf`(随机森林bagging) / `rule`(RFM规则评分卡,传统对照)。
+- 算法细节：XGBoost early-stopping + `scale_pos_weight` 类别平衡；lr/rf 用 `class_weight="balanced"`；rule 按 R最近行为(0.4)/F频次(0.35)/M金额(0.25) 分箱加权打分。
+- 切分：随机分层（同期 cohort 无跨用户时序依赖；防泄漏已在窗口构造阶段完成；真实数据无 split.json 时自动生成）。
+- 指标：AUC / PR-AUC / 混淆矩阵 / 分类报告 / 特征重要性。
+- 版本化：模型按 `<方法>_<时间戳>` 存档，`latest.json` 唯一上线指针，可秒级回滚。
+实现：`scripts/sceneB_model_router.py`
 
 ### 3.4 工程上如何使用标签
 - **批次**：把 `churn_label` + `churn_prob` 写回标签表（含 `model_version`、`as_of_date`）。
@@ -95,15 +98,16 @@
 
 ---
 
-## 4. 运行（本机已跑通，环境安装见 `sceneB/环境安装指南.md`）
+## 4. 运行（本机已跑通，操作手册见 `sceneB/使用说明.md`）
 
 ```bash
 cd sceneB
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：装环境
 .venv/bin/python scripts/sceneB_synth_data.py        # 1) 生成模拟 ODS 数据（纯 stdlib）
 .venv/bin/python scripts/sceneB_featurize.py         # 2) 特征工程 + 自造标签
-.venv/bin/python scripts/sceneB_llm_augment.py       # 3)（可选）LLM 增强，config 已 enabled
-.venv/bin/python scripts/sceneB_train_xgboost.py     # 4) XGBoost 训练 + 评估 + 批量打标
+.venv/bin/python scripts/sceneB_model_router.py                  # 3) xgboost 训练+评估+全量打标
+.venv/bin/python scripts/sceneB_model_router.py --compare        #    （可选）四方法同台对比
+.venv/bin/python scripts/sceneB_model_router.py --mode predict   # 4) 日常打标（不训练，用上线模型）
 ```
 
 产物输出到 `sceneB/output/`。
@@ -120,9 +124,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：
 | **AUC / PR-AUC** | **0.7134 / 0.6901**（测试集真实流失率 47.5%） |
 | Top 特征 | `n_events_30d`(0.295) > `n_events` > `recency_days` —— 近30天行为是最强流失信号，符合业务直觉 |
 | 全量打标分布 | 高危流失 24.0% / 中危流失 37.3% / 低危-稳定 38.7% |
-| 模型版本 | `model_20260901_104130.json`（output/model/ 版本化保留） |
+| 模型版本 | `xgboost_20260901_144225.json`（output/model/ 版本化保留） |
+| **四方法对比** | RF **0.7215** / XGBoost 0.7134 / 逻辑回归 0.7084 / RFM规则 0.7044（同一测试集，`--compare` 实测；机器学习整体优于传统规则） |
 | 数据来源 | 合成脚本（latent+趋势衰减驱动）+ LLM 增强（qwen3.8 已接入） |
-| 产物 | `sceneB_churn_labels.csv` / `sceneB_eval_report.txt` / `model/` 均已生成 ✅ |
+| 产物 | 打标 CSV / 评估报告 / 对比报告 / `model/` 均已生成 ✅ |
 
 > ⚠️ **定位说明**：以上为**合成数据**上的链路验证结果，证明生产型全链路（ODS 改造→训练→打标→版本化→增量）
 > 可运行、方法有效（模型确实学到"近期行为衰减→流失"的信号）；**数值不代表生产效果**。
@@ -147,7 +152,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：
 |---|---|---|
 | 预测目标 | 流失预测 | 综合价值/可自造y/特征充分 |
 | 数据模拟 | 脚本 + LLM 混合 | 脚本保证可复现，LLM 增强业务真实性；已接 qwen3.8（frac=0.05 可调），不可用时 mock 回退 |
-| 算法 | XGBoost | 梯度提升树，CPU 即可；轻量变体(LGBM/CatBoost)骨架通用 |
-| 增量/输出 | 离线批量 + 增量重训 | 标签表版本化，可回滚可回溯 |
+| 算法 | XGBoost（+lr/rf/rule 对比路由） | 梯度提升树为主力；`--model` 一参可切逻辑回归/随机森林/RFM规则评分卡对照 |
+| 增量/输出 | 离线批量 + 增量重训 | 标签表版本化，可回滚可回溯；`--mode predict` 日常打标不重训 |
 
 *文档维护：2026-08-31（2026-09-01 补生产部署运行手册与环境安装指南、本机真实跑通训练打标、SQL 补结果表）。关联：[[智能打标调研/PLAN]]、[[03_场景与标签需求/场景标签与方法匹配]]、[[02_方法调研/方法流程与可行性]]、[[智能打标调研/README]]。*
