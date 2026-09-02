@@ -2,9 +2,11 @@
   "enabled": true,
   "base_url": "http://10.20.77.89:8888/v1",
   "model": "Qwen3.8-27B-UD-Q8_K_XL",
-  "model_note": "即 qwen3.8（27B, unsloth UD-Q8_K_XL 量化）；以 /v1/models 返回的 id 为准，调用前需在服务器上已加载该模型",
-  "api_key": "sk-unsloth-e811f95feb13117bb02a57860ac52601",
+  "model_note": "即 qwen3.8（27B, unsloth UD-Q8_K_XL 量化）；以 /v1/models 返回的 id 为准，调用前需在服务器上已加载该模型。2026-09-02 实测端点可用（含 enable_thinking=false）",
+  "api_key": "sk-unsloth-9c40f0c2a47b109c54ea3a38008cedc6",
   "timeout": 120,
+  "enable_thinking": false,
+  "concurrency": 4,
   "max_batch": 20,
   "frac": 0.05,
   "max_tokens": 300

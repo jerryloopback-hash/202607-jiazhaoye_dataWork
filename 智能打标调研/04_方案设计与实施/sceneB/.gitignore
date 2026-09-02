@@ -3,4 +3,6 @@ output/
 __pycache__/
 *.pyc
 .venv/
+# 服务器同版本复测环境（Python 3.12 + 服务器锁定依赖）
+.venv312/
 wheels/

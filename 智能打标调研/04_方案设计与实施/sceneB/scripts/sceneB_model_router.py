@@ -11,23 +11,30 @@
   rule     RFM 规则评分卡（传统非ML对照：R最近行为/F频次/M金额 分箱加权打分，无训练过程）
 
 用法（路由）：
-  python scripts/sceneB_model_router.py                          # 默认 xgboost：训练+评估+全量打标
+  python scripts/sceneB_model_router.py                          # 默认 xgboost：训练+评估+全量打标（只产新版本，不改上线指针）
   python scripts/sceneB_model_router.py --model lr               # 指定方法：训练+打标
   python scripts/sceneB_model_router.py --model rule             # 传统评分卡（直接打分，无训练）
-  python scripts/sceneB_model_router.py --compare                # 四方法同台对比（同一测试集）
-  python scripts/sceneB_model_router.py --mode predict           # 日常打标：用 latest 模型，不训练
+  python scripts/sceneB_model_router.py --compare                # 四方法同台对比（同一测试集，给出最优建议）
+  python scripts/sceneB_model_router.py --deploy <版本号>         # 显式上线：把指定版本设为 latest 指针（如 rf_20260901_144143）
+  python scripts/sceneB_model_router.py --mode predict           # 日常打标：用 latest 指针所指模型，不训练
   python scripts/sceneB_model_router.py --mode predict --input 新特征.csv
+  python scripts/sceneB_model_router.py --input features_augmented.csv   # 指定训练数据（含 y_aug 列时优先用 LLM 校准标签）
 
-输入：output/features.csv（uid + 15 特征 + y）+ output/split.json（缺失时自动按 70/15/15 分层生成）
+⚠️ 上线指针 latest.json 只由 --deploy 修改（训练/对比只产生新版本文件，避免测试性训练
+   意外覆盖线上模型——2026-09-01 曾发生 rule 测试训练覆盖 RF 上线指针的事故）。回滚 =
+   --deploy 旧版本号。
+
+输入：output/features.csv（uid + 15 特征 + y）+ output/split.json（缺失时自动按 70/15/15 分层生成；
+      --input 可指定其他训练数据，含 y_aug 列时优先作为 y）
 输出：
-  output/model/model_<方法>_<ts>.<json|joblib>   —— 模型（版本化，历史全保留）
-  output/model/latest.json                       —— 上线指针（含方法/特征列/阈值，供 predict 模式）
+  output/model/model_<方法>_<ts>.<json|joblib>   —— 模型（版本化，历史全保留；训练不改指针）
+  output/model/latest.json                       —— 上线指针（仅由 --deploy 写入；含方法/特征列/阈值，供 predict 模式）
   output/sceneB_churn_labels.csv                 —— 全量打标（user_id, churn_prob, churn_label, model_version, as_of_date）
   output/sceneB_eval_report.txt                  —— 测试集评估报告（AUC/PR-AUC/混淆矩阵/分类报告/特征重要性）
   output/sceneB_model_comparison.txt             —— (--compare 时) 四方法同台对比表
 
 依赖：numpy, pandas, scikit-learn, xgboost（rule/lr/rf 只需 sklearn）。
-增量重训与回滚：重跑 train 即新增版本（不动线上）；回滚 = 把 latest.json 指回旧版本（或用旧模型重跑 predict）。
+增量重训与回滚：重跑 train 即新增版本（不动线上）；上线/回滚 = --deploy 目标版本号。
 """
 import os, json, csv, glob, time, argparse, datetime
 
@@ -84,8 +91,13 @@ def now_tag():
 # ---------------------------------------------------------------------------
 # 数据
 # ---------------------------------------------------------------------------
-def load():
-    df = pd.read_csv(os.path.join(OUT, "features.csv"))
+def load(input_path=None):
+    src = input_path or os.path.join(OUT, "features.csv")
+    df = pd.read_csv(src)
+    # LLM 校准标签优先：增强表含 y_aug 列时，用它替代脚本标签 y 作为训练监督信号
+    if "y_aug" in df.columns:
+        print(f"检测到 y_aug 列（LLM 校准标签，来自 features_augmented 流程），训练以 y_aug 为 y")
+        df["y"] = df["y_aug"].astype(int)
     split_path = os.path.join(OUT, "split.json")
     if os.path.exists(split_path):
         split = json.load(open(split_path, encoding="utf-8"))
@@ -188,6 +200,7 @@ def feature_importance(method, model):
 # 模型保存 / 加载（版本化 + latest 指针）
 # ---------------------------------------------------------------------------
 def save_model(method, model, version):
+    """只保存模型文件（版本化）。不写上线指针——上线一律走 deploy_version()。"""
     ext = "joblib" if method in ("lr", "rf") else "json"
     path = os.path.join(MODEL_DIR, f"model_{version}.{ext}")
     if method == "xgboost":
@@ -199,14 +212,32 @@ def save_model(method, model, version):
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"method": "rule", "definition": RULE_DEF,
                        "thresholds": [CHURN_HIGH, CHURN_MID]}, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def deploy_version(version):
+    """显式上线：把指定版本写入 latest.json 指针（唯一改指针的入口；回滚同样用它）。"""
+    method = next((m for m in METHODS if version == m or version.startswith(m + "_")), None)
+    if not method:
+        raise ValueError(f"版本号 {version} 无法解析出方法（前缀须为 {'/'.join(METHODS)}）")
+    matches = [p for p in list_versions() if f"model_{version}." in os.path.basename(p)]
+    if not matches:
+        raise FileNotFoundError(f"未找到版本 {version} 的模型文件（output/model/ 下无 model_{version}.*）")
+    prev = {}
+    pointer_path = os.path.join(MODEL_DIR, "latest.json")
+    if os.path.exists(pointer_path):
+        prev = json.load(open(pointer_path, encoding="utf-8"))
     meta = {
-        "latest_version": version, "method": method, "path": path,
+        "latest_version": version, "method": method, "path": matches[0],
         "feature_names": FEATURE_NAMES, "thresholds": [CHURN_HIGH, CHURN_MID],
         "as_of_date": datetime.datetime.now().isoformat(),
     }
-    with open(os.path.join(MODEL_DIR, "latest.json"), "w", encoding="utf-8") as f:
+    with open(pointer_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    return path
+    print(f"上线指针已更新: {prev.get('latest_version', '(无)')} -> {version}（{METHOD_DESC[method]}）")
+    if prev.get("method") and prev["method"] != method:
+        print(f"  ⚠️ 方法切换: {prev['method']} -> {method}，历史版本仍在 output/model/ 可随时 --deploy 回滚")
+    return pointer_path
 
 
 def load_latest():
@@ -301,10 +332,11 @@ def dist_summary(values):
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
-def run_train(method, df, split):
+def run_train(method, df, split, src=None):
     X, y, _ = build_sets(df, split)
     version = f"{method}_{now_tag()}"
-    print(f"[1/4] 数据: {len(df)} 行 × {len(FEATURE_NAMES)} 特征 | 方法: {METHOD_DESC[method]} | "
+    print(f"[1/4] 数据: {src or 'output/features.csv'} | {len(df)} 行 × {len(FEATURE_NAMES)} 特征 | "
+          f"方法: {METHOD_DESC[method]} | "
           f"切分 train={len(split['train'])} valid={len(split['valid'])} test={len(split['test'])}")
     print("[2/4] 训练 ...")
     model, dt = fit_method(method, X, y)
@@ -312,7 +344,7 @@ def run_train(method, df, split):
     print("[3/4] 测试集评估 ...")
     ev = evaluate(y["te"], predict_proba(method, model, X["te"]))
     print(f"   AUC={ev['auc']:.4f}  PR-AUC={ev['pr_auc']:.4f}  真实流失率={ev['positive_rate']:.1%}")
-    print("[4/4] 保存模型 + 全量打标 ...")
+    print("[4/4] 保存模型版本 + 全量打标 ...")
     mpath = save_model(method, model, version)
     lpath = write_labels(df, predict_proba(method, model, df[FEATURE_NAMES].astype(float)), version)
     epath = write_eval(method, version, ev, y["te"], feature_importance(method, model))
@@ -320,6 +352,8 @@ def run_train(method, df, split):
     print(f"  标签: {lpath}")
     print(f"  报告: {epath}")
     print(f"  历史版本数: {len(list_versions())}（重训自动新增版本、保留旧模型可回滚）")
+    print(f"  ⚠️ 该版本未上线（训练不改 latest.json）。上线: "
+          f"python scripts/sceneB_model_router.py --deploy {version}")
 
 
 def run_compare(df, split):
@@ -337,21 +371,22 @@ def run_compare(df, split):
         write_labels(df, proba_all, version)
         os.replace(os.path.join(OUT, "sceneB_churn_labels.csv"),
                    os.path.join(OUT, f"sceneB_churn_labels_{m}.csv"))
-        results.append((m, auc, pr, dt, proba_all))
+        results.append((m, auc, pr, dt, proba_all, version))
         print(f"  {METHOD_DESC[m]:<26} AUC={auc:.4f}  PR-AUC={pr:.4f}  训练{dt:>6.1f}s  分档 {dist_summary(proba_all)}")
     best = max(results, key=lambda r: r[1])
-    best_m, best_auc = best[0], best[1]
-    # latest.json 指向 AUC 最优方法：重训该方法生成最新版本并写入指针（逻辑简单可靠）
+    best_m, best_auc, best_ver = best[0], best[1], best[5]
     print("-" * 72)
-    print(f"AUC 最优: {METHOD_DESC[best_m]} (AUC={best_auc:.4f})，正在以最优方法刷新 latest 版本 ...")
-    run_train(best_m, df, split)
+    print(f"AUC 最优: {METHOD_DESC[best_m]} (AUC={best_auc:.4f})")
+    print(f"  ⚠️ 对比只产出版本、不改上线指针。确认后上线最优方法: "
+          f"python scripts/sceneB_model_router.py --deploy {best_ver}")
     # 对比报告落盘
     lines = ["场景B · 四方法同台对比（同一测试集）", "=" * 72,
              f"{'方法':<24}{'AUC':>8}{'PR-AUC':>9}{'训练耗时(s)':>12}   全量分档分布",
              *[f"{METHOD_DESC[m]:<24}{auc:>8.4f}{pr:>9.4f}{dt:>12.1f}   {dist_summary(p)}"
-               for m, auc, pr, dt, p in results],
+               for m, auc, pr, dt, p, _ in results],
              "",
-             f"结论: AUC 最优 = {METHOD_DESC[best_m]}；latest.json 已指向该方法（{best_m}）。",
+             f"结论: AUC 最优 = {METHOD_DESC[best_m]}（版本 {best_ver}）。",
+             "上线方式: python scripts/sceneB_model_router.py --deploy <版本号>（对比/训练均不自动改指针）。",
              "分档口径: 高危流失≥0.7 / 中危流失≥0.4 / 低危-稳定<0.4"]
     path = os.path.join(OUT, "sceneB_model_comparison.txt")
     with open(path, "w", encoding="utf-8") as f:
@@ -369,27 +404,34 @@ def run_predict(input_path):
     lpath = write_labels(df, proba, meta["latest_version"])
     print(f"  输出: {lpath}")
     print(f"  分档分布: {dist_summary(list(proba))}")
-    print("  （回滚方法：把 output/model/latest.json 指回旧版本后重跑本命令）")
+    print("  （回滚方法：python scripts/sceneB_model_router.py --deploy 旧版本号 后重跑本命令）")
 
 
 def main():
     ap = argparse.ArgumentParser(description="场景B 训练+打标路由程序")
     ap.add_argument("--model", choices=METHODS, default="xgboost", help="选择方法（默认 xgboost）")
     ap.add_argument("--mode", choices=["train", "predict"], default="train",
-                    help="train=训练+评估+打标；predict=用 latest 模型打标（不训练）")
-    ap.add_argument("--input", default=None, help="predict 模式的特征宽表 CSV（默认 output/features.csv）")
-    ap.add_argument("--compare", action="store_true", help="四方法同台对比（忽略 --model）")
+                    help="train=训练+评估+打标（只产新版本，不改指针）；predict=用 latest 指针模型打标（不训练）")
+    ap.add_argument("--input", default=None,
+                    help="指定特征宽表 CSV（train 模式=训练数据，含 y_aug 列时优先作 y；predict 模式=打标数据）")
+    ap.add_argument("--compare", action="store_true", help="四方法同台对比（忽略 --model，不改上线指针）")
+    ap.add_argument("--deploy", metavar="版本号", default=None,
+                    help="显式上线：把指定版本写入 latest.json 指针（如 rf_20260901_144143）；回滚也用它")
     args = ap.parse_args()
+
+    if args.deploy:
+        deploy_version(args.deploy)
+        return
 
     if args.mode == "predict":
         run_predict(args.input or os.path.join(OUT, "features.csv"))
         return
 
-    df, split = load()
+    df, split = load(args.input)
     if args.compare:
         run_compare(df, split)
     else:
-        run_train(args.model, df, split)
+        run_train(args.model, df, split, src=args.input)
 
 
 if __name__ == "__main__":

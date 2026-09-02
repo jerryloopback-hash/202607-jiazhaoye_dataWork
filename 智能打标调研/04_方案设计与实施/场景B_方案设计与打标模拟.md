@@ -4,7 +4,7 @@
 > 对应匹配表里的 **场景 2 流失/复购预测**：用历史行为(观察窗→特征)预测未来是否流失(标签窗→y)。
 > 类型标注：[A] DWS 直算，**无需 ER 层** —— 因此场景 B 不再依赖 ER 同事产出，可独立落地。
 >
-> **本 demo 定位**：跑通「ODS 改造数据 → 特征工程 → 自造标签 → 训练 → 评估 → 批量打标 → 增量重训」完整生产型链路（2026-09-01 已在本机真实跑通，四方法可路由切换）。
+> **本 demo 定位**：跑通「ODS 改造数据 → 特征工程 → 自造标签 → 训练 → 评估 → 批量打标 → 增量重训」完整生产型链路（2026-09-01 本机跑通；2026-09-02 在服务器同版本环境 `.venv312` + LLM 真实校准标签下复跑全流程，AUC 0.7801，四方法可路由切换）。
 
 ---
 
@@ -74,7 +74,7 @@
 - 算法细节：XGBoost early-stopping + `scale_pos_weight` 类别平衡；lr/rf 用 `class_weight="balanced"`；rule 按 R最近行为(0.4)/F频次(0.35)/M金额(0.25) 分箱加权打分。
 - 切分：随机分层（同期 cohort 无跨用户时序依赖；防泄漏已在窗口构造阶段完成；真实数据无 split.json 时自动生成）。
 - 指标：AUC / PR-AUC / 混淆矩阵 / 分类报告 / 特征重要性。
-- 版本化：模型按 `<方法>_<时间戳>` 存档，`latest.json` 唯一上线指针，可秒级回滚。
+- **版本化**：模型按 `<方法>_<时间戳>` 存档；**上线指针 `latest.json` 只由 `--deploy <版本号>` 显式写入**（训练/对比不自动改指针，杜绝测试性训练覆盖线上模型——2026-09-01 曾发生 rule 测试训练覆盖 RF 上线指针的事故，2026-09-02 修复），可秒级回滚。
 实现：`scripts/sceneB_model_router.py`
 
 ### 3.4 工程上如何使用标签
@@ -103,32 +103,38 @@
 
 ```bash
 cd sceneB
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：装环境
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：装环境（版本锁定=生产服务器实测，见环境安装指南）
 .venv/bin/python scripts/sceneB_synth_data.py        # 1) 生成模拟 ODS 数据（纯 stdlib）
 .venv/bin/python scripts/sceneB_featurize.py         # 2) 特征工程 + 自造标签
-.venv/bin/python scripts/sceneB_model_router.py                  # 3) xgboost 训练+评估+全量打标
-.venv/bin/python scripts/sceneB_model_router.py --compare        #    （可选）四方法同台对比
-.venv/bin/python scripts/sceneB_model_router.py --mode predict   # 4) 日常打标（不训练，用上线模型）
+.venv/bin/python scripts/sceneB_llm_augment.py       # 3)（可选）LLM 业务校准 y → features_augmented.csv
+.venv/bin/python scripts/sceneB_model_router.py \
+    --input output/features_augmented.csv            # 4) 初次训练（默认 xgboost；含 y_aug 时优先用 LLM 校准标签）
+.venv/bin/python scripts/sceneB_model_router.py \
+    --compare --input output/features_augmented.csv  #    （可选）四方法同台对比（只产版本，不自动上线）
+.venv/bin/python scripts/sceneB_model_router.py --deploy <版本号>   # 5) 评估达标后显式上线
+.venv/bin/python scripts/sceneB_model_router.py --mode predict      # 6) 日常打标（不训练，用上线模型）
 ```
 
 产物输出到 `sceneB/output/`。
 
 ---
 
-## 5. demo 结果（2026-09-01 本机真实运行）
+## 5. demo 结果（2026-09-02 服务器同版本环境真实运行，含 LLM 校准）
 
 | 项 | 值 |
 |---|---|
 | 用户数 / 特征 | 12000 / **15 维** |
-| 流失率(y=1) | 47.8%（类平衡良好） |
+| 标签 | 脚本自造 y（流失率 47.8%）+ **LLM 校准 600 条**（frac=0.05，与脚本标签一致率 65.2%）→ y_aug（校准后流失率 41.4%） |
 | 切分 | train 8400 / valid 1800 / test 1800 |
-| **AUC / PR-AUC** | **0.7134 / 0.6901**（测试集真实流失率 47.5%） |
-| Top 特征 | `n_events_30d`(0.295) > `n_events` > `recency_days` —— 近30天行为是最强流失信号，符合业务直觉 |
-| 全量打标分布 | 高危流失 24.0% / 中危流失 37.3% / 低危-稳定 38.7% |
-| 模型版本 | `xgboost_20260901_144225.json`（output/model/ 版本化保留） |
-| **四方法对比** | RF **0.7215** / XGBoost 0.7134 / 逻辑回归 0.7084 / RFM规则 0.7044（同一测试集，`--compare` 实测；机器学习整体优于传统规则） |
-| 数据来源 | 合成脚本（latent+趋势衰减驱动）+ LLM 增强（qwen3.8 已接入） |
+| **AUC / PR-AUC** | **0.7801 / 0.7439**（随机森林；初次训练 XGBoost 0.7697 已超 0.75 达标线；较 09-01 纯脚本标签基线 0.7134 提升约 5.6pt） |
+| Top 特征 | `n_events_30d`(0.155) > `n_events` > `recency_days` —— 近30天行为是最强流失信号，符合业务直觉 |
+| 全量打标分布 | 高危流失 22.5% / 中危流失 37.2% / 低危-稳定 40.3% |
+| 上线版本 | `rf_20260902_121703`（`--deploy` 显式上线；增量重训 AUC 持平后切换，全程指针只经 --deploy 变更） |
+| **四方法对比** | RF **0.7801** / RFM规则 0.7708 / XGBoost 0.7697 / 逻辑回归 0.7638（同一测试集，`--compare` 实测；ML 优于规则；对比只产版本不自动上线） |
+| 数据来源 | 合成脚本（latent+趋势衰减驱动）+ **LLM 真实增强（qwen3.8，2026-09-02 打通，600/600 真实判定、strict 模式）** |
 | 产物 | 打标 CSV / 评估报告 / 对比报告 / `model/` 均已生成 ✅ |
+
+> 2026-09-01 首次跑通基线（Python 3.14、纯脚本标签、LLM 未打通）：AUC 0.7134 / RF 0.7215 / LR 0.7084 / 规则 0.7044，高危 24.0%/中危 37.3%/低危 38.7%。
 
 > ⚠️ **定位说明**：以上为**合成数据**上的链路验证结果，证明生产型全链路（ODS 改造→训练→打标→版本化→增量）
 > 可运行、方法有效（模型确实学到"近期行为衰减→流失"的信号）；**数值不代表生产效果**。
@@ -152,8 +158,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # 首次：
 | 决策点 | 选择 | 说明 |
 |---|---|---|
 | 预测目标 | 流失预测 | 综合价值/可自造y/特征充分 |
-| 数据模拟 | 脚本 + LLM 混合 | 脚本保证可复现，LLM 增强业务真实性；已接 qwen3.8（frac=0.05 可调），不可用时 mock 回退 |
+| 数据模拟 | 脚本 + LLM 混合 | 脚本保证可复现，LLM 增强业务真实性；已接 qwen3.8（frac=0.05 可调，关闭 reasoning + 8 并发），不可用时 mock 回退；**2026-09-02 起 LLM 校准标签 y_aug 实际作为训练 y 使用** |
 | 算法 | XGBoost（+lr/rf/rule 对比路由） | 梯度提升树为主力；`--model` 一参可切逻辑回归/随机森林/RFM规则评分卡对照（2026-09-01 与用户确认选型） |
+| 上线机制 | `--deploy` 显式切换（2026-09-02） | 训练/对比只产新版本、不自动改 latest.json，杜绝测试性训练覆盖线上模型 |
 | 增量/输出 | 离线批量 + 增量重训 | 标签表版本化，可回滚可回溯；`--mode predict` 日常打标不重训 |
 
 *文档维护：2026-08-31（2026-09-01 补生产部署运行手册/使用说明/环境安装指南、本机真实跑通训练打标、四方法路由对比）。关联：[[智能打标调研/PLAN]]、[[03_场景与标签需求/场景标签与方法匹配]]、[[02_方法调研/方法流程与可行性]]、[[智能打标调研/README]]。*
