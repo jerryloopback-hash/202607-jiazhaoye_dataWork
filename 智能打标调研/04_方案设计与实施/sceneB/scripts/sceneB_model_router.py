@@ -19,6 +19,7 @@
   python scripts/sceneB_model_router.py --mode predict           # 日常打标：用 latest 指针所指模型，不训练
   python scripts/sceneB_model_router.py --mode predict --input 新特征.csv
   python scripts/sceneB_model_router.py --input features_augmented.csv   # 指定训练数据（含 y_aug 列时优先用 LLM 校准标签）
+  python scripts/sceneB_rfm_tuner.py --auto                              # RFM 评分卡调参（传参/自动，免改代码；产出 rule 版本后 --deploy 上线）
 
 ⚠️ 上线指针 latest.json 只由 --deploy 修改（训练/对比只产生新版本文件，避免测试性训练
    意外覆盖线上模型——2026-09-01 曾发生 rule 测试训练覆盖 RF 上线指针的事故）。回滚 =
@@ -74,14 +75,17 @@ METHOD_DESC = {
     "rule": "RFM规则评分卡(传统对照,无训练)",
 }
 
-# RFM 评分卡定义（传统方法；打分越高越活跃，churn_prob = 1 - activity）
-RULE_DEF = {
-    "R_近7天": 1.00, "R_8-30天": 0.75, "R_31-90天": 0.50, "R_91-180天": 0.25, "R_无行为": 0.00,
-    "F_0次": 0.00, "F_1-3次": 0.25, "F_4-10次": 0.50, "F_11-25次": 0.75, "F_25次以上": 1.00,
-    "M_0": 0.00, "M_低": 0.25, "M_中": 0.50, "M_高": 0.75, "M_很高": 1.00,
+# RFM 评分卡默认参数（传统方法；打分越高越活跃，churn_prob = 1 - activity）。
+# 分箱为升序边界：R 档位越高（越久未动）得分越低、F/M 档位越高得分越高，每档等步长 1/n。
+# 全部参数可被 scripts/sceneB_rfm_tuner.py 传参/自动调参产出的新版本覆盖（--deploy 后生效）。
+RULE_PARAMS = {
+    "r_edges": [7, 30, 90, 180],   # recency_days：<=7天→1.0, <=30→0.75, <=90→0.5, <=180→0.25, 其余→0
+    "f_edges": [0, 3, 10, 25],     # n_events：<=0→0.0, <=3→0.25, <=10→0.5, <=25→0.75, 其余→1.0
+    "m_edges": [0, 3, 5, 7],       # spend_total(log1p)：<=0→0.0, <=3→0.25, <=5→0.5, <=7→0.75, 其余→1.0
     "weights": {"R": 0.40, "F": 0.35, "M": 0.25},
-    "note": "R=recency_days分箱, F=n_events分箱, M=spend_total(log1p)分箱；activity=R*0.4+F*0.35+M*0.25",
 }
+RULE_NOTE = ("R=recency_days分箱(越小越活跃), F=n_events分箱, M=spend_total(log1p)分箱；"
+             "activity=R*wR+F*wF+M*wM（权重自动归一化）, churn_prob=1-activity；档位得分等步长 1/n")
 
 
 def now_tag():
@@ -166,23 +170,35 @@ def fit_method(method, X, y):
             class_weight="balanced", n_jobs=-1, random_state=SEED,
         ).fit(X["tr"], y["tr"])
     elif method == "rule":
-        model = None      # 规则无训练
+        model = dict(RULE_PARAMS)   # 规则无训练，返回默认参数（调参版本由 sceneB_rfm_tuner.py 产出）
     else:
         raise ValueError(f"未知方法: {method}")
     return model, time.time() - t0
 
 
+def rfm_tier(x, edges):
+    """升序边界分箱档位：x<=edges[0]→0 … x>edges[-1]→n（共 n+1 档，边界值取左档）。"""
+    return np.searchsorted(np.asarray(edges, dtype=float), x, side="left")
+
+
+def rfm_score_params(X, params):
+    """按参数对 RFM 打分（rule 方法唯一打分实现；默认参数 = RULE_PARAMS）。
+    R 档位越高（越久未动）得分越低，F/M 档位越高得分越高，每档等步长 1/n；
+    activity = wR*R + wF*F + wM*M（权重归一化），churn_prob = 1 - activity。"""
+    n = (len(params["r_edges"]), len(params["f_edges"]), len(params["m_edges"]))
+    w = params["weights"]
+    tot = w["R"] + w["F"] + w["M"]
+    R_ = 1.0 - rfm_tier(X["recency_days"].astype(float).values, params["r_edges"]) / n[0]
+    F_ = rfm_tier(X["n_events"].astype(float).values, params["f_edges"]) / n[1]
+    M_ = rfm_tier(X["spend_total"].astype(float).values, params["m_edges"]) / n[2]
+    return 1.0 - (w["R"] * R_ + w["F"] * F_ + w["M"] * M_) / tot
+
+
 def predict_proba(method, model, X):
     """统一打分入口。X 为含 FEATURE_NAMES 列的 DataFrame。"""
     if method == "rule":
-        rec = X["recency_days"].astype(float).values
-        f = X["n_events"].astype(float).values
-        m = X["spend_total"].astype(float).values
-        R = np.select([rec <= 7, rec <= 30, rec <= 90, rec <= 180], [1.0, 0.75, 0.50, 0.25], default=0.0)
-        F = np.select([f <= 0, f <= 3, f <= 10, f <= 25], [0.0, 0.25, 0.50, 0.75], default=1.0)
-        M = np.select([m <= 0, m <= 3, m <= 5, m <= 7], [0.0, 0.25, 0.50, 0.75], default=1.0)
-        activity = 0.40 * R + 0.35 * F + 0.25 * M
-        return 1.0 - activity
+        params = model if isinstance(model, dict) and "r_edges" in model else RULE_PARAMS
+        return rfm_score_params(X, params)
     return model.predict_proba(X)[:, 1]
 
 
@@ -199,7 +215,7 @@ def feature_importance(method, model):
 # ---------------------------------------------------------------------------
 # 模型保存 / 加载（版本化 + latest 指针）
 # ---------------------------------------------------------------------------
-def save_model(method, model, version):
+def save_model(method, model, version, thresholds=None):
     """只保存模型文件（版本化）。不写上线指针——上线一律走 deploy_version()。"""
     ext = "joblib" if method in ("lr", "rf") else "json"
     path = os.path.join(MODEL_DIR, f"model_{version}.{ext}")
@@ -210,8 +226,10 @@ def save_model(method, model, version):
         joblib.dump(model, path)
     elif method == "rule":
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"method": "rule", "definition": RULE_DEF,
-                       "thresholds": [CHURN_HIGH, CHURN_MID]}, f, ensure_ascii=False, indent=2)
+            json.dump({"method": "rule", "params": model if isinstance(model, dict) else RULE_PARAMS,
+                       "note": RULE_NOTE,
+                       "thresholds": list(thresholds or [CHURN_HIGH, CHURN_MID])},
+                      f, ensure_ascii=False, indent=2)
     return path
 
 
@@ -227,9 +245,15 @@ def deploy_version(version):
     pointer_path = os.path.join(MODEL_DIR, "latest.json")
     if os.path.exists(pointer_path):
         prev = json.load(open(pointer_path, encoding="utf-8"))
+    thresholds = [CHURN_HIGH, CHURN_MID]
+    if method == "rule":
+        # rule 版本自带调参阈值（sceneB_rfm_tuner.py 产出），上线时随指针带入供分档使用
+        mdata = json.load(open(matches[0], encoding="utf-8"))
+        if isinstance(mdata.get("thresholds"), list) and len(mdata["thresholds"]) == 2:
+            thresholds = [float(t) for t in mdata["thresholds"]]
     meta = {
         "latest_version": version, "method": method, "path": matches[0],
-        "feature_names": FEATURE_NAMES, "thresholds": [CHURN_HIGH, CHURN_MID],
+        "feature_names": FEATURE_NAMES, "thresholds": thresholds,
         "as_of_date": datetime.datetime.now().isoformat(),
     }
     with open(pointer_path, "w", encoding="utf-8") as f:
@@ -241,7 +265,7 @@ def deploy_version(version):
 
 
 def load_latest():
-    """读 latest.json 指针，返回 (method, model)。rule 返回 (method, None)。"""
+    """读 latest.json 指针，返回 (method, model)。rule 返回 (method, 调参参数dict|None)。"""
     meta = json.load(open(os.path.join(MODEL_DIR, "latest.json"), encoding="utf-8"))
     method, path = meta["method"], meta["path"]
     if method == "xgboost":
@@ -252,6 +276,12 @@ def load_latest():
     if method in ("lr", "rf"):
         import joblib
         return method, joblib.load(path)
+    if method == "rule":
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        params = data.get("params")
+        # 旧格式文件（仅文案 definition、无参数）或字段缺失时回退默认口径
+        return method, params if isinstance(params, dict) and "r_edges" in params else None
     return method, None
 
 
@@ -263,10 +293,10 @@ def list_versions():
 # ---------------------------------------------------------------------------
 # 评估 / 打标输出
 # ---------------------------------------------------------------------------
-def churn_label(prob):
-    if prob >= CHURN_HIGH:
+def churn_label(prob, high=CHURN_HIGH, mid=CHURN_MID):
+    if prob >= high:
         return "高危流失"
-    if prob >= CHURN_MID:
+    if prob >= mid:
         return "中危流失"
     return "低危/稳定"
 
@@ -280,18 +310,19 @@ def evaluate(y_te, proba):
             "cm": cm, "positive_rate": float(y_te.mean())}
 
 
-def write_labels(df_all, proba, version):
-    """全量打标：user_id + 概率 + 分档 + 版本(含方法) + 日期。"""
+def write_labels(df_all, proba, version, thresholds=None, path=None):
+    """全量打标：user_id + 概率 + 分档 + 版本(含方法) + 日期。thresholds=(高危,中危) 可覆盖默认分档。"""
+    high, mid = thresholds if thresholds else (CHURN_HIGH, CHURN_MID)
     rows = []
     for uid, p in zip(df_all["uid"], proba):
         rows.append({
             "user_id": uid,
             "churn_prob": round(float(p), 4),
-            "churn_label": churn_label(float(p)),
+            "churn_label": churn_label(float(p), high, mid),
             "model_version": version,
             "as_of_date": datetime.datetime.now().date().isoformat(),
         })
-    path = os.path.join(OUT, "sceneB_churn_labels.csv")
+    path = path or os.path.join(OUT, "sceneB_churn_labels.csv")
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=["user_id", "churn_prob", "churn_label",
                                           "model_version", "as_of_date"])
@@ -321,10 +352,11 @@ def write_eval(method, version, ev, y_te, imp):
     return path
 
 
-def dist_summary(values):
-    """统计分档占比（输入为概率列表）。"""
+def dist_summary(values, thresholds=None):
+    """统计分档占比（输入为概率列表；thresholds=(高危,中危)，缺省用全局阈值）。"""
     from collections import Counter
-    c = Counter(churn_label(float(p)) for p in values)
+    high, mid = thresholds if thresholds else (CHURN_HIGH, CHURN_MID)
+    c = Counter(churn_label(float(p), high, mid) for p in values)
     n = sum(c.values())
     return f"高危{100*c.get('高危流失',0)/n:.1f}%/中危{100*c.get('中危流失',0)/n:.1f}%/低危{100*c.get('低危/稳定',0)/n:.1f}%"
 
@@ -398,12 +430,13 @@ def run_predict(input_path):
     method, model = load_latest()
     meta = json.load(open(os.path.join(MODEL_DIR, "latest.json"), encoding="utf-8"))
     df = pd.read_csv(input_path)
+    thresholds = meta.get("thresholds") or [CHURN_HIGH, CHURN_MID]
     print(f"打标模式（不训练）：方法={METHOD_DESC[method]} 版本={meta['latest_version']}")
-    print(f"  输入: {input_path}（{len(df)} 行）")
+    print(f"  输入: {input_path}（{len(df)} 行）  分档阈值: 高危≥{thresholds[0]} / 中危≥{thresholds[1]}")
     proba = predict_proba(method, model, df[meta["feature_names"]].astype(float))
-    lpath = write_labels(df, proba, meta["latest_version"])
+    lpath = write_labels(df, proba, meta["latest_version"], thresholds=thresholds)
     print(f"  输出: {lpath}")
-    print(f"  分档分布: {dist_summary(list(proba))}")
+    print(f"  分档分布: {dist_summary(list(proba), thresholds)}")
     print("  （回滚方法：python scripts/sceneB_model_router.py --deploy 旧版本号 后重跑本命令）")
 
 
