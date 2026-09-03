@@ -16,14 +16,16 @@
   python scripts/sceneB_model_router.py --model rule             # 传统评分卡（直接打分，无训练）
   python scripts/sceneB_model_router.py --compare                # 四方法同台对比（同一测试集，给出最优建议）
   python scripts/sceneB_model_router.py --deploy <版本号>         # 显式上线：把指定版本设为 latest 指针（如 rf_20260901_144143）
+  python scripts/sceneB_model_router.py --model lr --deploy true  # 训练+评估+打标后【立即上线刚训出的版本】（一步到位）
   python scripts/sceneB_model_router.py --mode predict           # 日常打标：用 latest 指针所指模型，不训练
   python scripts/sceneB_model_router.py --mode predict --input 新特征.csv
   python scripts/sceneB_model_router.py --input features_augmented.csv   # 指定训练数据（含 y_aug 列时优先用 LLM 校准标签）
   python scripts/sceneB_rfm_tuner.py --auto                              # RFM 评分卡调参（传参/自动，免改代码；产出 rule 版本后 --deploy 上线）
 
 ⚠️ 上线指针 latest.json 只由 --deploy 修改（训练/对比只产生新版本文件，避免测试性训练
-   意外覆盖线上模型——2026-09-01 曾发生 rule 测试训练覆盖 RF 上线指针的事故）。回滚 =
-   --deploy 旧版本号。
+   意外覆盖线上模型——2026-09-01 曾发生 rule 测试训练覆盖 RF 上线指针的事故）。--deploy
+   双语义：传版本号=上线指定版本；传 true=train 模式训练后立即上线刚训出的版本（--compare
+   永不支持该写法，直接报错）。回滚 = --deploy 旧版本号。
 
 输入：output/features.csv（uid + 15 特征 + y）+ output/split.json（缺失时自动按 70/15/15 分层生成；
       --input 可指定其他训练数据，含 y_aug 列时优先作为 y）
@@ -364,7 +366,7 @@ def dist_summary(values, thresholds=None):
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
-def run_train(method, df, split, src=None):
+def run_train(method, df, split, src=None, auto_deploy=False):
     X, y, _ = build_sets(df, split)
     version = f"{method}_{now_tag()}"
     print(f"[1/4] 数据: {src or 'output/features.csv'} | {len(df)} 行 × {len(FEATURE_NAMES)} 特征 | "
@@ -384,8 +386,12 @@ def run_train(method, df, split, src=None):
     print(f"  标签: {lpath}")
     print(f"  报告: {epath}")
     print(f"  历史版本数: {len(list_versions())}（重训自动新增版本、保留旧模型可回滚）")
-    print(f"  ⚠️ 该版本未上线（训练不改 latest.json）。上线: "
-          f"python scripts/sceneB_model_router.py --deploy {version}")
+    if auto_deploy:
+        print("  （--deploy true：接下来把本版本写入上线指针）")
+    else:
+        print(f"  ⚠️ 该版本未上线（训练不改 latest.json）。上线: "
+              f"python scripts/sceneB_model_router.py --deploy {version}")
+    return version
 
 
 def run_compare(df, split):
@@ -447,14 +453,29 @@ def main():
                     help="train=训练+评估+打标（只产新版本，不改指针）；predict=用 latest 指针模型打标（不训练）")
     ap.add_argument("--input", default=None,
                     help="指定特征宽表 CSV（train 模式=训练数据，含 y_aug 列时优先作 y；predict 模式=打标数据）")
-    ap.add_argument("--compare", action="store_true", help="四方法同台对比（忽略 --model，不改上线指针）")
-    ap.add_argument("--deploy", metavar="版本号", default=None,
-                    help="显式上线：把指定版本写入 latest.json 指针（如 rf_20260901_144143）；回滚也用它")
+    ap.add_argument("--compare", action="store_true", help="四方法同台对比（忽略 --model，不改上线指针；不支持 --deploy true）")
+    ap.add_argument("--deploy", nargs="?", const="true", metavar="版本号|true", default=None,
+                    help="显式上线（唯一改 latest.json 的入口）：传版本号=上线指定版本（如 rf_20260901_144143，回滚也用它）；"
+                         "传 true=train 模式训练完成后立即上线刚训出的新版本（一步到位）。默认 false")
     args = ap.parse_args()
 
-    if args.deploy:
-        deploy_version(args.deploy)
-        return
+    # --deploy 双语义：版本号=上线指定版本（原有用法，立即执行并退出）；true=训练后上线刚训出的版本
+    deploy_train = False
+    if args.deploy is not None:
+        val = str(args.deploy).strip().lower()
+        if val in ("true", "1", "yes", "y"):
+            deploy_train = True
+        elif val in ("false", "0", "no", "n"):
+            deploy_train = False      # 显式 false = 训练后不上线（与缺省等价）
+        else:
+            deploy_version(str(args.deploy).strip())   # 原有用法：上线指定版本号
+            return
+
+    if deploy_train and args.compare:
+        raise SystemExit("❌ --compare 不支持 --deploy true：对比永远只产出版本、不改上线指针。"
+                         "请先看对比报告 output/sceneB_model_comparison.txt，确认最优后单独 --deploy <版本号>")
+    if deploy_train and args.mode == "predict":
+        raise SystemExit("❌ --mode predict 不训练、无新版本可上线；--deploy true 仅配 train 模式（默认模式）使用")
 
     if args.mode == "predict":
         run_predict(args.input or os.path.join(OUT, "features.csv"))
@@ -463,6 +484,11 @@ def main():
     df, split = load(args.input)
     if args.compare:
         run_compare(df, split)
+    elif deploy_train:
+        version = run_train(args.model, df, split, src=args.input, auto_deploy=True)
+        print("\n[上线] --deploy true：把刚训练的版本写入上线指针 ...")
+        deploy_version(version)
+        print("  ✅ 下次 --mode predict 即使用新模型；回滚: python scripts/sceneB_model_router.py --deploy <旧版本号>")
     else:
         run_train(args.model, df, split, src=args.input)
 
